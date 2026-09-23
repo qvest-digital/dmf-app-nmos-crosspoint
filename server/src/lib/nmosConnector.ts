@@ -1669,6 +1669,11 @@ export class NmosRegistryConnector {
         }else if(senderInfo.transport == "websocket" || senderInfo.transport == "mqtt"){
             // TODO Websocket / MQTT
             for(let i = 0; i < receiverLegCount; i++){ patch.transport_params.push({}); }
+        }else if(senderInfo.transport == "mxl"){
+            // An MXL flow lives in shared memory on a host; a network
+            // receiver has nothing to join.
+            SyncLog.log("warning", "NMOS Connect", "An MXL sender cannot feed a " + transportKind(receiver.transport) + " receiver.");
+            throw new Error("An MXL sender can only feed an MXL receiver.");
         }else{
             SyncLog.log("warning", "NMOS Connect", "Sender has no transport Information.");
             throw new Error("Transport Type missing.");
