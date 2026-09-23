@@ -1,5 +1,6 @@
 import { CrosspointDevice, CrosspointFlow, CrosspointShadowState, CrosspointState, CrosspointShadowDevice } from "./crosspointAbstraction";
 import { ComplexCompare, ShortenNames } from "./functions";
+import { TRANSPORT_MXL } from "./nmosConnectionPatch";
 
 import { BitrateCalculator } from "./bitrateHelper/BitrateCalculator"
 import { parseSettings } from "./parseSettings";
@@ -976,6 +977,11 @@ class CrosspointUpdateThread{
                                         this.nmosState.senders[nmosId].transport == "urn:x-nmos:transport:rtp.mcast"
                                     ){
                                         source.capabilities.transport = "rtp";
+                                    }else if(this.nmosState.senders[nmosId].transport == TRANSPORT_MXL){
+                                        source.capabilities.transport = "mxl";
+                                        // No transport file to fetch (manifest_href is null);
+                                        // the flow is read from the sender's IS-05 /active.
+                                        source.manifestOk = true;
                                     }
                                     source.capabilities.mediaTypes.push(this.nmosState.flows[this.nmosState.senders[nmosId].flow_id].media_type);
                                     // Subscription may not yet be populated for a freshly-
@@ -1037,6 +1043,8 @@ class CrosspointUpdateThread{
                                         this.nmosState.receivers[nmosId].transport == "urn:x-nmos:transport:rtp.mcast"
                                     ){
                                         receiver.capabilities.transport = "rtp";
+                                    }else if(this.nmosState.receivers[nmosId].transport == TRANSPORT_MXL){
+                                        receiver.capabilities.transport = "mxl";
                                     }
                                     // Same defensive treatment as the sender side — a brand-
                                     // new IS-04 receiver may lack `subscription` or `caps`

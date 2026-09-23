@@ -1929,7 +1929,9 @@ export interface CrosspointConnectionSenderInfo {
     interfaces:any[],
     active:boolean,
     error:string,
-    transport:string
+    transport:string,
+    // The MXL flow and domain an MXL sender writes, from its IS-05 /active.
+    mxl?:{flowId:string, domainId:string}
 }
 
 export interface CrosspointShadowDevice {
