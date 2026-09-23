@@ -113,7 +113,7 @@ docker run -d \
   --hostname nmos-crosspoint_v3 \
   -v "$(pwd)/server/config:/nmos-crosspoint/server/config" \
   -v "$(pwd)/server/state:/nmos-crosspoint/server/state" \
-  gemini2350/nmos-crosspoint_v3:latest
+  ghcr.io/qvest-digital/dmf-app-nmos-crosspoint:latest
 ```
 
 Via File Copy:
