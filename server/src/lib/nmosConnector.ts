@@ -20,6 +20,7 @@ import * as jsonpatch from 'fast-json-patch';
 
 import * as sdpTransform from 'sdp-transform';
 import { CrosspointAbstraction, CrosspointConnectionSenderInfo } from "./crosspointAbstraction";
+import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams } from "./nmosConnectionPatch";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
 
@@ -1084,7 +1085,7 @@ export class NmosRegistryConnector {
                         // Order matters: v1.1 first, so newer devices that
                         // advertise both don't get stuck on the older URL
                         // (which may exist for compatibility but lack fields).
-                        let preferred = ["urn:x-nmos:control:sr-ctrl/v1.1", "urn:x-nmos:control:sr-ctrl/v1.0"];
+                        let preferred = SR_CTRL_TYPES.map(t => t.type);
                         for(let ctrlType of preferred){
                             device.controls.forEach((c:any)=>{
                                 if(c.type === ctrlType){
@@ -1505,12 +1506,30 @@ export class NmosRegistryConnector {
         //    info.manifestFile = manifest._RAWSDP;
         //}else{
             // Load manifest
+            // An MXL sender has no transport file (BCP-007-03: manifest_href
+            // is null). What a receiver needs is the flow and domain the
+            // sender resolved, which its IS-05 /active carries.
+            if(sender.transport == TRANSPORT_MXL){
+                try{
+                    let hrefs = selectControlHrefs(device.controls);
+                    if(hrefs.length == 0){
+                        info.error = "MXL sender advertises no IS-05 control";
+                        return info;
+                    }
+                    let active = await axios.get(joinHref(hrefs[0].href, "single/senders/" + senderId + "/active"), {timeout:10000});
+                    info.mxl = mxlEndpointFromActive(active.data);
+                }catch(e:any){
+                    info.error = "Can not read MXL flow from sender: " + (e?.message || e?.code);
+                    return info;
+                }
+            }else{
             try{
                 let sdp = await axios.get(sender.manifest_href)
                 info.manifestFile = sdp.data;
             }catch(e){
                 info.error = "Can not load Manifest from sender: " + e.code;
                 return info;
+            }
             }
         //}
 
@@ -1522,12 +1541,7 @@ export class NmosRegistryConnector {
             })
         });
 
-        if(sender.transport == "urn:x-nmos:transport:rtp.mcast"){
-            info.transport = "rtp.mcast"
-        }
-        if(sender.transport == "urn:x-nmos:transport:rtp"){
-            info.transport = "rtp"
-        } 
+        info.transport = transportKind(sender.transport);
 
         info.active = sender.subscription.active;
 
@@ -1622,36 +1636,47 @@ export class NmosRegistryConnector {
             }
         }
 
-        let receiverLegCount = receiver.interface_bindings.length;
-        for(let i = 0; i < receiverLegCount; i++){
+        if(receiver.transport == TRANSPORT_MXL){
+            // BCP-007-03: an MXL receiver is pointed at a flow in a domain,
+            // with no transport file and exactly one set of parameters.
             if(senderInfo.senderId == "disconnect"){
-                patch.transport_params.push({ rtp_enabled: false });
-                continue;
-            }
-            if(senderInfo.transport == "rtp.mcast" || senderInfo.transport == "rtp"){
-                // The SDP has exactly one transport entry per `m=` block.
-                // Receiver legs without a matching media block must be
-                // explicitly disabled — leaving them as `{rtp_enabled:true,
-                // interface_ip:"auto"}` makes strict receivers reject the
-                // whole PATCH because there's no media to bind to.
-                if(i < sdpLegs.length && sdpLegs[i].multicast_ip){
-                    let leg:any = {
-                        multicast_ip:     sdpLegs[i].multicast_ip,
-                        destination_port: sdpLegs[i].destination_port,
-                        rtp_enabled:      true
-                    };
-                    if(sdpLegs[i].source_ip){ leg.source_ip = sdpLegs[i].source_ip; }
-                    patch.transport_params.push(leg);
-                }else{
-                    patch.transport_params.push({ rtp_enabled: false });
-                }
-            }else if(senderInfo.transport == "websocket" || senderInfo.transport == "mqtt"){
-                // TODO Websocket / MQTT
-                patch.transport_params.push({});
+                patch = buildMxlDisconnectPatch();
             }else{
-                SyncLog.log("warning", "NMOS Connect", "Sender has no transport Information.");
-                throw new Error("Transport Type missing.");
+                if(senderInfo.transport != "mxl" || !senderInfo.mxl){
+                    SyncLog.log("warning", "NMOS Connect", "An MXL receiver can only take an MXL sender, got transport: " + (senderInfo.transport || "unknown"));
+                    throw new Error("An MXL receiver can only take an MXL sender.");
+                }
+                let constraints:any = null;
+                try{
+                    let hrefs = selectControlHrefs(device.controls);
+                    if(hrefs.length > 0){
+                        constraints = (await axios.get(joinHref(hrefs[0].href, "single/receivers/" + receiverId + "/constraints"), {timeout:10000})).data;
+                    }
+                }catch(e){
+                    // No constraints to read: the device answers for the domain itself.
+                }
+                try{
+                    patch = buildMxlReceiverPatch(patch.sender_id ?? null, senderInfo.mxl, constraints);
+                }catch(e:any){
+                    let id = SyncLog.log("warning", "NMOS Connect", e.message, {receiverId, sender:senderInfo.senderId});
+                    throw new LoggedError(e.message, id);
+                }
             }
+        }else{
+        let receiverLegCount = receiver.interface_bindings.length;
+        if(senderInfo.senderId == "disconnect" || senderInfo.transport == "rtp.mcast" || senderInfo.transport == "rtp"){
+            patch.transport_params = buildRtpTransportParams(receiverLegCount, sdpLegs, senderInfo.senderId == "disconnect");
+        }else if(senderInfo.transport == "websocket" || senderInfo.transport == "mqtt"){
+            // TODO Websocket / MQTT
+            for(let i = 0; i < receiverLegCount; i++){ patch.transport_params.push({}); }
+        }else if(senderInfo.transport == "mxl"){
+            // An MXL flow lives in shared memory on a host; a network
+            // receiver has nothing to join.
+            SyncLog.log("warning", "NMOS Connect", "An MXL sender cannot feed a " + transportKind(receiver.transport) + " receiver.");
+            throw new Error("An MXL sender can only feed an MXL receiver.");
+        }else{
+            SyncLog.log("warning", "NMOS Connect", "Sender has no transport Information.");
+            throw new Error("Transport Type missing.");
         }
 
         if(senderInfo.transport == "rtp.mcast" || senderInfo.transport == "rtp"){
@@ -1673,6 +1698,7 @@ export class NmosRegistryConnector {
         }else{
             patch.master_enable = true;
         }
+        }
         // Warum ????
 
         //if (receiver.subscription.active) {
@@ -1690,21 +1716,7 @@ export class NmosRegistryConnector {
             //}
         //}
 
-        let versionFound = false;
-        let controlHrefs = [];
-        let controlTypes = [{type:"urn:x-nmos:control:sr-ctrl/v1.1",version:"v1.1"}, {type:"urn:x-nmos:control:sr-ctrl/v1.0",version:"v1.0"}]
-
-        for(let type of controlTypes){
-            device.controls.forEach((control)=>{
-                if(control.type == type.type){
-                    controlHrefs.push({href:control.href, version:type.version});
-                    versionFound = true;
-                }
-            })
-            if(versionFound){
-                break;
-            }
-        }
+        let controlHrefs = selectControlHrefs(device.controls);
 
         let done = false;
 
@@ -1760,7 +1772,7 @@ export class NmosRegistryConnector {
             let sender = this.nmosState.senders[senderId];
             let device = this.nmosState.devices[sender.device_id];
 
-            let controlTypes = [{type:"urn:x-nmos:control:sr-ctrl/v1.1",version:"v1.1"}, {type:"urn:x-nmos:control:sr-ctrl/v1.0",version:"v1.0"}]
+            let controlTypes = SR_CTRL_TYPES
 
             for(let type of controlTypes){
                 device.controls.forEach((control)=>{
@@ -1863,10 +1875,7 @@ export class NmosRegistryConnector {
             }
             let device = this.nmosState.devices[receiver.device_id];
 
-            let controlTypes = [
-                {type:"urn:x-nmos:control:sr-ctrl/v1.1", version:"v1.1"},
-                {type:"urn:x-nmos:control:sr-ctrl/v1.0", version:"v1.0"}
-            ];
+            let controlTypes = SR_CTRL_TYPES;
             for(let type of controlTypes){
                 device.controls.forEach((control:any)=>{
                     if(control.type == type.type){
@@ -1956,7 +1965,7 @@ export class NmosRegistryConnector {
             let sender = this.nmosState.senders[senderId];
             let device = this.nmosState.devices[sender.device_id];
 
-            let controlTypes = [{type:"urn:x-nmos:control:sr-ctrl/v1.1",version:"v1.1"}, {type:"urn:x-nmos:control:sr-ctrl/v1.0",version:"v1.0"}]
+            let controlTypes = SR_CTRL_TYPES
 
             for(let type of controlTypes){
                 device.controls.forEach((control)=>{
@@ -2229,7 +2238,7 @@ export class NmosRegistryConnector {
             // Accept both supported IS-05 control versions — QSC and other
             // newer devices advertise v1.1 only. v1.1 wins when both are
             // present (newer schema, better field coverage).
-            let preferred = ["urn:x-nmos:control:sr-ctrl/v1.1", "urn:x-nmos:control:sr-ctrl/v1.0"];
+            let preferred = SR_CTRL_TYPES.map(t => t.type);
             for(let ctrlType of preferred){
                 for(let c of device.controls){
                     if(c && c.type === ctrlType){
