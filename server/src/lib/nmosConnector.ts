@@ -20,7 +20,7 @@ import * as jsonpatch from 'fast-json-patch';
 
 import * as sdpTransform from 'sdp-transform';
 import { CrosspointAbstraction, CrosspointConnectionSenderInfo } from "./crosspointAbstraction";
-import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams } from "./nmosConnectionPatch";
+import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, tryNextControl } from "./nmosConnectionPatch";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
 
@@ -1739,9 +1739,9 @@ export class NmosRegistryConnector {
                 return SyncLog.log("success", "nmos_connect", "Successfully patched: "+receiverId, {href:patchHref, data:patch, status:result?.status, response:result?.data})
             }catch(e){
                 if (axios.isAxiosError(e)) {
-                    if(e.code == "ETIMEDOUT"){
+                    if(tryNextControl(e)){
                         // NEXT
-                        let id = SyncLog.log("info", "nmos_connect", "Patch on "+patchHref+" timed out, trying next.");
+                        let id = SyncLog.log("info", "nmos_connect", "Patch on "+patchHref+" unreachable ("+e.code+"), trying next.");
                     }else{
                         // TODO....
                         if(e.code == "ERR_BAD_REQUEST"){
@@ -1834,9 +1834,9 @@ export class NmosRegistryConnector {
                     return;
                 }catch(e){
                     if (axios.isAxiosError(e)) {
-                        if(e.code == "ETIMEDOUT"){
+                        if(tryNextControl(e)){
                             // NEXT
-                            SyncLog.log("info", "nmos", "Patch on "+senderId+" timed out, trying next.");
+                            SyncLog.log("info", "nmos", "Patch on "+senderId+" unreachable ("+e.code+"), trying next.");
                         }else{
                             // TODO....
                             if(e.code == "ERR_BAD_REQUEST"){
@@ -1903,8 +1903,8 @@ export class NmosRegistryConnector {
                     return;
                 }catch(e:any){
                     if(axios.isAxiosError(e)){
-                        if(e.code == "ETIMEDOUT"){
-                            SyncLog.log("info", "nmos", "Patch on " + receiverId + " timed out, trying next.");
+                        if(tryNextControl(e)){
+                            SyncLog.log("info", "nmos", "Patch on " + receiverId + " unreachable ("+e.code+"), trying next.");
                         }else{
                             let logBody:any = {controlHrefs, failedControl:patchHref, patch, status:e.response?.status};
                             if(e.response){
@@ -2187,9 +2187,9 @@ export class NmosRegistryConnector {
                     return;
                 }catch(e){
                     if (axios.isAxiosError(e)) {
-                        if(e.code == "ETIMEDOUT"){
+                        if(tryNextControl(e)){
                             // NEXT
-                            SyncLog.log("info", "nmos", "Patch on "+senderId+" timed out, trying next.");
+                            SyncLog.log("info", "nmos", "Patch on "+senderId+" unreachable ("+e.code+"), trying next.");
                         }else{
                             // TODO....
                             if(e.code == "ERR_BAD_REQUEST"){

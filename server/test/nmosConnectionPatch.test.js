@@ -65,3 +65,16 @@ test("RTP legs follow the SDP and surplus legs are switched off", () => {
     ]);
     assert.deepEqual(p.buildRtpTransportParams(2, legs, true), [{ rtp_enabled: false }, { rtp_enabled: false }]);
 });
+
+test("a control that cannot be reached is skipped, a device's answer is not", () => {
+    // A node advertises one API under several hrefs; one that does not resolve
+    // or refuses the connection says nothing about the next.
+    for (const code of ["ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "ECONNABORTED"]) {
+        assert.equal(p.tryNextControl({ code }), true, code);
+    }
+    // The device answered: that is its verdict on the request, the same
+    // behind every href.
+    assert.equal(p.tryNextControl({ code: "ERR_BAD_REQUEST", response: { status: 400 } }), false);
+    assert.equal(p.tryNextControl({ code: "ERR_BAD_RESPONSE", response: { status: 500 } }), false);
+    assert.equal(p.tryNextControl({ response: { status: 404 } }), false);
+});
