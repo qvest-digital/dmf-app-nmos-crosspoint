@@ -132,3 +132,19 @@ export function buildRtpTransportParams(receiverLegCount: number, sdpLegs: SdpLe
     }
     return out;
 }
+
+// Errors that say the href could not be reached rather than that the device
+// refused the request. A node advertises one Connection API under several
+// hrefs -- a host name and each address -- and one that does not resolve or
+// refuses the connection says nothing about the next.
+const UNREACHABLE = new Set([
+    "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET",
+    "EHOSTUNREACH", "ENETUNREACH", "ECONNABORTED",
+]);
+
+// Whether a failed request should be retried on the node's next href. A device
+// that answered has given its verdict, which is the same behind every href.
+export function tryNextControl(e: any): boolean {
+    if (e && e.response) return false;
+    return UNREACHABLE.has(e && e.code);
+}
