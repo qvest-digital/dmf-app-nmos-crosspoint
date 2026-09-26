@@ -69,6 +69,17 @@ export function mxlEndpointFromActive(active: any): MxlEndpoint {
     return { flowId, domainId };
 }
 
+/** The flow and domain an MXL sender writes now, or null when its /active
+ *  names none or it is switched off. */
+export function resolvedMxlEndpoint(active: any): MxlEndpoint | null {
+    if (!active || active.master_enable === false) return null;
+    try {
+        return mxlEndpointFromActive(active);
+    } catch (e) {
+        return null;
+    }
+}
+
 /**
  * The staged PATCH connecting an MXL receiver to a sender's flow.
  *

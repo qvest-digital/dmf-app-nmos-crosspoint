@@ -20,10 +20,11 @@ import * as jsonpatch from 'fast-json-patch';
 
 import * as sdpTransform from 'sdp-transform';
 import { CrosspointAbstraction, CrosspointConnectionSenderInfo } from "./crosspointAbstraction";
-import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, buildSenderEnablePatch, usesMulticastLease, hasRtpDestination, tryNextControl } from "./nmosConnectionPatch";
+import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, resolvedMxlEndpoint, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, buildSenderEnablePatch, usesMulticastLease, hasRtpDestination, tryNextControl } from "./nmosConnectionPatch";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
 import { receiverNeedsActive } from "./transport";
+import { MxlSenderSeen, mxlSenderStep, mxlReceiversToFollow } from "./mxlFollow";
 
 const fs = require("fs");
 
@@ -1127,11 +1128,20 @@ export class NmosRegistryConnector {
                     }
 
                     let gotData = false;
+                    let seq = (this.senderActiveSeq.get(senderId) || 0) + 1;
+                    this.senderActiveSeq.set(senderId, seq);
                     for(let href of active_href){
                         try{
                             let response = await axios.get(href);
+                            // An older read answering late would put back a
+                            // flow the sender has left, and followMxlSender
+                            // would point its receivers back at it.
+                            if(this.senderActiveSeq.get(senderId) !== seq){ return; }
                             this.nmosState.senderActiveData[senderId] = response.data;
                             gotData = true;
+                            if(sender && sender.transport == TRANSPORT_MXL){
+                                this.followMxlSender(senderId, response.data, sender.flow_id ?? null);
+                            }
                             break;
                         }catch(e){
                             SyncLog.log("warn", "NMOS", "Can not get active configuration of sender:",{error: e.message, href : href});
@@ -1164,11 +1174,61 @@ export class NmosRegistryConnector {
                     // remove element
                     try {
                         delete this.nmosState.senderActiveData[g.path];
+                        this.mxlSenders.delete(g.path);
                         this.scheduleSyncNmos();
                         this.updateCrosspoint();
                     } catch (e) {}
                     
                 }
+            }
+        }
+    }
+
+    // Latest /active read per sender: an older answer arriving late is dropped.
+    private senderActiveSeq: Map<string, number> = new Map();
+    // What was last seen of each MXL sender, see mxlFollow.mxlSenderStep.
+    private mxlSenders: Map<string, MxlSenderSeen> = new Map();
+
+    /**
+     * Keep the MXL receivers taking a sender on the flow it writes. The sender
+     * can move to another flow while it runs, and a receiver left on the old
+     * one reads a flow nobody writes any more. Not gated by
+     * reconnectReceiversOnSenderChange: see mxlFollow.ts.
+     */
+    private followMxlSender(senderId:string, active:any, nmosFlowId:string|null){
+        let step = mxlSenderStep(this.mxlSenders.get(senderId) || null, resolvedMxlEndpoint(active), nmosFlowId);
+        this.mxlSenders.set(senderId, step.seen);
+        if(step.action === "reread"){
+            setTimeout(()=>{
+                let sender = this.nmosState.senders[senderId];
+                if(sender){ this.getSenderActive("senders", {path:senderId, post:sender}); }
+            }, 2000);
+            return;
+        }
+        if(step.action !== "follow"){ return; }
+        let receiverIds = mxlReceiversToFollow(senderId, step.from, this.nmosState.receivers, this.nmosState.receiverActiveData);
+        SyncLog.log("info", "NMOS", "MXL sender " + senderId + " moved from flow " + step.from.flowId + " to " + step.seen.endpoint.flowId +
+            (receiverIds.length > 0 ? ", pointing " + receiverIds.length + " receiver(s) at it." : ", no receiver to point at it."),
+            {senderId, from:step.from, to:step.seen.endpoint, receivers:receiverIds});
+        if(receiverIds.length > 0){
+            this.repointMxlReceivers(senderId, receiverIds).catch(()=>{});
+        }
+    }
+
+    private async repointMxlReceivers(senderId:string, receiverIds:string[]){
+        // Read /active again rather than use the endpoint just seen, so a
+        // second move in the meantime is not undone.
+        let info = await this.connectionGetSenderInfo(senderId);
+        if(info.error != ""){
+            SyncLog.log("warn", "NMOS", "MXL sender " + senderId + " moved, receivers left as they are: " + info.error, {receivers:receiverIds});
+            return;
+        }
+        for(let receiverId of receiverIds){
+            try{
+                await this.makeConnection(receiverId, info);
+                SyncLog.log("success", "NMOS", "Pointed MXL receiver " + receiverId + " at flow " + info.mxl.flowId + " of sender " + senderId);
+            }catch(e:any){
+                SyncLog.log("warn", "NMOS", "Could not point MXL receiver " + receiverId + " at the new flow of sender " + senderId + ": " + (e?.message || e));
             }
         }
     }
