@@ -119,6 +119,8 @@
       // The crosspoint device's alias (used for the change-alias modal)
       alias:string;
       name:string;
+      // Crosspoint number; the matrix lists devices by it. -1 when none.
+      num:number;
       available:boolean;
       // PTP Grand-Master ID the node clock is locked to (or "" if none / not PTP).
       gmid:string;
@@ -353,6 +355,7 @@
           tooltip: tooltipStr,
           alias: deviceAlias,
           name: dev.name || "",
+          num: (typeof dev.num === "number") ? dev.num : -1,
           available: !!dev.available,
           gmid: dev.gmid || "",
           gmidLocked: !!dev.gmidLocked,
@@ -805,6 +808,21 @@
       labelModal.close();
     }
 
+    // ----- Crosspoint number -----
+    // Sent on change (Enter or leaving the field). The server swaps with the
+    // device that already holds the number; an empty field clears it.
+    function changeDeviceNum(dev:DeviceRow, e:Event){
+      let input = e.target as HTMLInputElement;
+      let v = input.value.trim();
+      let newNum = v === "" ? -1 : Number.parseInt(v);
+      if(!(newNum === -1 || newNum > 0)){
+        input.value = dev.num > 0 ? ("" + dev.num) : "";
+        return;
+      }
+      ServerConnector.post("crosspoint", { action:"movedevice", devId: dev.id, newNum })
+        .catch(()=>{});
+    }
+
     // ----- SDP viewer modal -----
     let sdpModal:any;
     let sdpModalTitle:string = "";
@@ -1064,6 +1082,13 @@
               {/if}
             </span>
             <span class="det-head-spacer"></span>
+            <input type="number" class="det-num-input" min="1" step="1" placeholder="#"
+                   value={dev.num > 0 ? dev.num : ""}
+                   on:click|stopPropagation
+                   on:keydown={(e)=>{ if(e.key === "Enter"){ e.currentTarget.blur(); } }}
+                   on:change={(e)=>changeDeviceNum(dev, e)}
+                   use:OverlayMenuService.tooltip
+                   data-tooltip="Crosspoint number: the matrix lists devices by it. A number in use swaps with that device; empty clears it." />
             <span class="det-device-counts">{dev.senders.length} TX · {dev.receivers.length} RX</span>
             {#if !dev.available}
               <button class="btn btn-sm det-device-forget"

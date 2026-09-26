@@ -2,6 +2,7 @@ import { SyncObject } from "./SyncServer/syncObject";
 import { LoggedError, SyncLog } from "./syncLog";
 import { error } from "console";
 import { matchConnections } from "./connectionMatch";
+import { sortDevices } from "./deviceOrder";
 import { NmosRegistryConnector } from "./nmosConnector";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
@@ -1405,6 +1406,10 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
             d.displayTooltip    = composed.tooltip;
             d.displayLabelShort = composed.short;
         }
+
+        // The matrix lists devices in this order. Sorted here because the
+        // label it falls back to is only composed above.
+        sortDevices(this.crosspointState.devices);
 
         // Pass 2: sender legs + codec, build {flowId → enriched-sender-info}
         // Also collects every ACTIVE sender per (leg index → multicast IP)

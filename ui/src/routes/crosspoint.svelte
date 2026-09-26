@@ -98,6 +98,9 @@
     // a slim node band (header row above the sender columns / separator row
     // before the receiver rows). Single-device nodes render exactly as
     // before with the combined "<Node> - <Device>" label.
+    // A group takes the position of its first device, and the server sends
+    // devices by crosspoint number, so a node sits at its lowest number and
+    // its devices follow in number order.
     interface CpNodeGroup {
       key:string;
       label:string;

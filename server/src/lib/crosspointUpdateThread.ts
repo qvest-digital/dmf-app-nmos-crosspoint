@@ -2,6 +2,7 @@ import { CrosspointDevice, CrosspointFlow, CrosspointShadowState, CrosspointStat
 import { ComplexCompare, ShortenNames } from "./functions";
 import { TRANSPORT_MXL } from "./nmosConnectionPatch";
 import { transportFamily, senderIsRedundant, receiverIsRedundant, connectedSenderId } from "./transport";
+import { moveDeviceNum } from "./deviceOrder";
 
 import { BitrateCalculator } from "./bitrateHelper/BitrateCalculator"
 import { parseSettings } from "./parseSettings";
@@ -326,27 +327,14 @@ class CrosspointUpdateThread{
         }
 
         if(change.action == "movedevice"){
-            let newNum = Number.parseInt(""+change.newNum);
-            let oldNum = this.crosspointShadow.devices[change.devId].num;
-
-            if(oldNum != newNum){
-                if(newNum == -1){
-                    this.crosspointShadow.devices[change.devId].num = -1;
-                    changed = true;
+            if(moveDeviceNum(this.crosspointShadow.devices, change.devId, change.newNum)){
+                changed = true;
+                // A number set by hand in the dynamic range must not be
+                // handed out again to the next device that appears.
+                let num = this.crosspointShadow.devices[change.devId].num;
+                if(num >= this.nextDeviceNum){
+                    this.nextDeviceNum = num + 1;
                 }
-                if(newNum > 0){
-
-                    for(let dev of Object.keys(this.crosspointShadow.devices)){
-                        if(this.crosspointShadow.devices[dev].num == newNum){
-                            this.crosspointShadow.devices[dev].num = oldNum;
-                            changed = true;
-                        }
-                    }
-
-                    this.crosspointShadow.devices[change.devId].num = newNum;
-                    changed = true;
-                }
-
             }
         }
 
