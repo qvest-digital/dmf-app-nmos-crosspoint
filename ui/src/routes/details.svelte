@@ -366,12 +366,13 @@
         });
       });
 
-      // sort by combined label
-      newList.sort((a,b)=>(a.label||"").localeCompare(b.label||""));
+      // No sort here: the server sends devices in crosspoint number order
+      // (deviceOrder.ts), the order of the matrix.
 
       // Group devices by their NMOS node. Groups keep the position of their
-      // first device in the sorted list; only nodes with 2+ devices get the
-      // header treatment, single-device nodes render as plain cards.
+      // first device, so a node sits at its lowest number; only nodes with
+      // 2+ devices get the header treatment, single-device nodes render as
+      // plain cards.
       let groupByKey:{[key:string]:NodeGroup} = {};
       let newGroups:NodeGroup[] = [];
       newList.forEach((row)=>{

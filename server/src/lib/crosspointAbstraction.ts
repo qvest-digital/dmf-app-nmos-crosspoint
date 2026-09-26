@@ -1407,8 +1407,8 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
             d.displayLabelShort = composed.short;
         }
 
-        // The matrix lists devices in this order. Sorted here because the
-        // label it falls back to is only composed above.
+        // The matrix and the Details page list devices in this order. Sorted
+        // here because the label it falls back to is only composed above.
         sortDevices(this.crosspointState.devices);
 
         // Pass 2: sender legs + codec, build {flowId → enriched-sender-info}
