@@ -152,6 +152,8 @@ export function connectedSenderId(receiver: any, receiverActive: any, senderActi
     if (sub.sender_id) return "" + sub.sender_id;
     if (receiverActive?.sender_id) return "" + receiverActive.sender_id;
     if (transportFamily(receiver?.transport) !== "rtp") return "";
+    // IS-05 says it is switched off: nothing is joined, whatever IS-04 says.
+    if (receiverActive && receiverActive.master_enable === false) return "";
     return matchSenderByAddress(receiverActive, senderActiveData, senders);
 }
 

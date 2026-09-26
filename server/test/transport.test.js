@@ -126,6 +126,9 @@ test("no address match means no connection", () => {
     // A sender whose /active matches but is switched off does not count.
     const off = { ...fx.senderActive, [SPG_VIDEO_2]: { ...fx.senderActive[SPG_VIDEO_2], master_enable: false } };
     assert.equal(t.connectedSenderId(fx.receivers[GW_RX_SRC2_VIDEO], fx.receiverActive[GW_RX_SRC2_VIDEO], off, fx.senders), "");
+    // IS-05 says switched off, IS-04 still says running.
+    const offRx = { ...fx.receiverActive[GW_RX_SRC2_VIDEO], master_enable: false };
+    assert.equal(t.connectedSenderId(fx.receivers[GW_RX_SRC2_VIDEO], offRx, fx.senderActive, fx.senders), "");
     // A different source on the same group is a different stream.
     const otherSrc = JSON.parse(JSON.stringify(fx.receiverActive[GW_RX_SRC2_VIDEO]));
     otherSrc.transport_params.forEach((l) => { l.source_ip = "192.0.2.250"; });

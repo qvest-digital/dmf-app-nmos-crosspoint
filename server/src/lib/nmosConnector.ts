@@ -868,6 +868,15 @@ export class NmosRegistryConnector {
                     if(type == "receivers"){
                         this.scheduleReceiverActive(g);
                     }
+                    if(type == "devices" && g.hasOwnProperty("post")){
+                        // A receiver grain can arrive before its device's:
+                        // its /active could not be read then, so try now.
+                        for(const [rid, r] of Object.entries(this.nmosState.receivers) as any){
+                            if(r && r.device_id === g.path && receiverNeedsActive(r)){
+                                this.scheduleReceiverActive({path:rid, post:r});
+                            }
+                        }
+                    }
                 });
 
 
@@ -1167,6 +1176,9 @@ export class NmosRegistryConnector {
     // Pending receiver /active reads keyed by receiver id, coalesced like the
     // manifest fetches.
     private receiverActiveTimers: Map<string, any> = new Map();
+    // Latest request per receiver: an older answer arriving late is dropped.
+    private receiverActiveSeq: Map<string, number> = new Map();
+    private receiverActiveRefresh:any = null;
 
     /**
      * Keep receiverActiveData in step with one receiver grain. Only a running
@@ -1185,6 +1197,16 @@ export class NmosRegistryConnector {
             }
             return;
         }
+        // Another controller can re-point such a receiver by transport file
+        // without IS-04 changing at all, so these few are re-read now and
+        // then as well.
+        if(!this.receiverActiveRefresh){
+            this.receiverActiveRefresh = setInterval(()=>{
+                for(const [rid, r] of Object.entries(this.nmosState.receivers) as any){
+                    if(receiverNeedsActive(r)){ this.scheduleReceiverActive({path:rid, post:r}, 0); }
+                }
+            }, 30000);
+        }
         let existing = this.receiverActiveTimers.get(receiverId);
         if(existing){ clearTimeout(existing); }
         this.receiverActiveTimers.set(receiverId, setTimeout(()=>{
@@ -1194,6 +1216,8 @@ export class NmosRegistryConnector {
     }
 
     async getReceiverActive(receiverId:string){
+        let seq = (this.receiverActiveSeq.get(receiverId) || 0) + 1;
+        this.receiverActiveSeq.set(receiverId, seq);
         let hrefs:{href:string, version:string}[] = [];
         try{
             let receiver:any = this.nmosState.receivers[receiverId];
@@ -1204,6 +1228,7 @@ export class NmosRegistryConnector {
         for(let href of hrefs){
             try{
                 let response = await axios.get(joinHref(href.href, "single/receivers/" + receiverId + "/active"), {timeout:10000});
+                if(this.receiverActiveSeq.get(receiverId) !== seq){ return; }
                 // Gone or connected by name in the meantime: drop, do not keep.
                 if(!receiverNeedsActive(this.nmosState.receivers[receiverId])){
                     delete this.nmosState.receiverActiveData[receiverId];
@@ -1215,9 +1240,14 @@ export class NmosRegistryConnector {
             }catch(e:any){
                 if(!tryNextControl(e)){
                     SyncLog.log("warn", "NMOS", "Can not get active configuration of receiver: " + receiverId, {error: e?.message, href: href.href});
-                    return;
+                    break;
                 }
             }
+        }
+        // Nothing read: what was read before no longer counts.
+        if(this.receiverActiveSeq.get(receiverId) === seq && this.nmosState.receiverActiveData[receiverId]){
+            delete this.nmosState.receiverActiveData[receiverId];
+            this.updateCrosspoint();
         }
     }
 

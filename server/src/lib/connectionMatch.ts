@@ -23,7 +23,9 @@ export interface MatchResult {
  * A receiver whose transport family no sender in the request offers is
  * refused and left alone: an MXL receiver has nothing to take from a 2110
  * sender and the reverse, and switching it off because of that would be a
- * disconnect nobody asked for. Every other receiver gets the lowest-numbered
+ * disconnect nobody asked for. Only the family decides: a receiver of the
+ * right family but an essence no sender offers is disconnected, as it always
+ * was on a device-level take. Every other receiver gets the lowest-numbered
  * unused sender of its essence type and transport family, or -- as it always
  * has -- no sender at all, which disconnects it.
  */

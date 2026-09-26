@@ -588,6 +588,14 @@
      *  "mixed" when its flows use several. Redundant when every 2110 flow of
      *  it is ST 2022-7. Unknown transports are left out of the set. */
     function deviceTransport(dev:any, side:"senders"|"receivers"):{family:string, redundant:boolean, tip:string}{
+      // Computed once per axis rebuild (doFilter makes fresh device copies).
+      let key = "_transport_" + side;
+      if(dev && dev[key]){ return dev[key]; }
+      let r = computeDeviceTransport(dev, side);
+      if(dev){ dev[key] = r; }
+      return r;
+    }
+    function computeDeviceTransport(dev:any, side:"senders"|"receivers"):{family:string, redundant:boolean, tip:string}{
       let families:string[] = [];
       let rtp = 0, dup = 0;
       let flows = (dev && dev.transportFlows) ? dev.transportFlows : (dev ? dev[side] : null);
@@ -633,9 +641,18 @@
      *  refused; neither is a pair that already shows a connection. */
     function cellRefused(srcDev:any, src:any, dstDev:any, dst:any):boolean{
       if((srcDev && srcDev.isNode) || (dstDev && dstDev.isNode)) return false;
-      let srcFams = src ? new Set([transportFamily(src.capabilities?.transport)]) : deviceFamilies.get(srcDev?.id)?.senders;
-      let dstFams = dst ? new Set([transportFamily(dst.capabilities?.transport)]) : deviceFamilies.get(dstDev?.id)?.receivers;
-      if(!srcFams || !dstFams || srcFams.size === 0 || dstFams.size === 0) return false;
+      if(src && dst){ return !transportsCompatible(dst.capabilities?.transport, src.capabilities?.transport); }
+      let srcFams = src ? null : deviceFamilies.get(srcDev?.id)?.senders;
+      let dstFams = dst ? null : deviceFamilies.get(dstDev?.id)?.receivers;
+      if(src){
+        let sf = transportFamily(src.capabilities?.transport);
+        if(!dstFams || dstFams.size === 0 || sf === "") return false;
+        for(const f of dstFams){ if(f === "" || f === sf) return false; }
+        return true;
+      }
+      if(!srcFams || srcFams.size === 0) return false;
+      if(dst){ return !familyFed(transportFamily(dst.capabilities?.transport), srcFams); }
+      if(!dstFams || dstFams.size === 0) return false;
       for(const f of dstFams){ if(familyFed(f, srcFams)) return false; }
       return true;
     }
@@ -649,7 +666,11 @@
       const vertical = ()=>!!node.closest("thead");
       const truncated = ()=>node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1;
       const over = (e:any)=>{
-        if(e.target && e.target.closest && e.target.closest(".cp-edit, .cp-mon")){ return; }
+        if(e.target && e.target.closest && e.target.closest(".cp-edit, .cp-mon")){
+          // The button's own tooltip takes over; the name steps back.
+          OverlayMenuService.tooltipObservable.next({ active:false, uipos:{x:0, y:0}, text:"" });
+          return;
+        }
         if(!current || !truncated()){ return; }
         let r = node.getBoundingClientRect();
         OverlayMenuService.tooltipObservable.next(vertical()
@@ -1854,8 +1875,8 @@
 
       <li class="cp-show">
         <button class="label gap-2" bind:this={showMenuButton} on:click={toggleShowMenu}
-                aria-haspopup="true" aria-expanded={showMenuOpen} aria-controls="cp-show-menu">
-          <span class="label-text">Show</span>{#if showMenuNarrowed}<span class="cp-show-narrowed" aria-label="(filtered)"></span>{/if}
+                aria-expanded={showMenuOpen} aria-controls="cp-show-menu" on:keydown={showMenuKey}>
+          <span class="label-text">Show</span>{#if showMenuNarrowed}<span class="cp-show-narrowed" aria-hidden="true"></span><span class="sr-only">(filtered)</span>{/if}
           <Icon src={ChevronDown} size="16"></Icon>
         </button>
         {#if showMenuOpen}
