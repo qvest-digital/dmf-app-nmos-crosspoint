@@ -121,6 +121,16 @@ export function buildSenderEnablePatch(transport: string, legCount: number, disa
     return patch;
 }
 
+/**
+ * Whether the multicast lease manager may give a sender a group. Only an RTP
+ * sender has destination_ip and destination_port; an MXL, WebSocket or MQTT
+ * sender answers a PATCH carrying them with 400, and its /active never shows a
+ * leased group, so every refresh would try again.
+ */
+export function usesMulticastLease(sender: any): boolean {
+    return transportKind(sender?.transport).startsWith("rtp");
+}
+
 export interface SdpLeg {
     multicast_ip: string,
     destination_port: number,

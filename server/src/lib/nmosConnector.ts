@@ -20,7 +20,7 @@ import * as jsonpatch from 'fast-json-patch';
 
 import * as sdpTransform from 'sdp-transform';
 import { CrosspointAbstraction, CrosspointConnectionSenderInfo } from "./crosspointAbstraction";
-import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, buildSenderEnablePatch, tryNextControl } from "./nmosConnectionPatch";
+import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, buildSenderEnablePatch, usesMulticastLease, tryNextControl } from "./nmosConnectionPatch";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
 import { receiverNeedsActive } from "./transport";
@@ -1382,6 +1382,7 @@ export class NmosRegistryConnector {
             for(let senderId in this.nmosState.senders){
                 let sender = this.nmosState.senders[senderId];
                 if(!sender) continue;
+                if(!usesMulticastLease(sender)) continue;
                 if(sender.subscription && sender.subscription.active){
                     activeIds.push(senderId);
                 }
@@ -1425,6 +1426,7 @@ export class NmosRegistryConnector {
                 try{
                     let sender = this.nmosState.senders[senderId];
                     if(!sender) continue;
+                    if(!usesMulticastLease(sender)) continue;
                     let isActive = !!(sender.subscription && sender.subscription.active);
                     if(!isActive) continue;
                     if(manager.getLease(senderId)) continue;  // already has a lease
@@ -2354,6 +2356,7 @@ export class NmosRegistryConnector {
 
         let sender = this.nmosState.senders[senderId];
         if(!sender){ return; }
+        if(!usesMulticastLease(sender)){ return; }
         let flow:any = this.nmosState.flows[sender.flow_id];
         if(!flow){ return; }
         let source:any = this.nmosState.sources[flow.source_id];

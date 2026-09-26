@@ -98,3 +98,12 @@ test("switching an RTP sender sets rtp_enabled on every leg", () => {
     assert.deepEqual(p.buildSenderEnablePatch("urn:x-nmos:transport:rtp.ucast", 1, false).transport_params,
         [{ rtp_enabled: true }]);
 });
+
+test("only RTP senders take a multicast lease", () => {
+    assert.equal(p.usesMulticastLease({ transport: "urn:x-nmos:transport:rtp.mcast" }), true);
+    assert.equal(p.usesMulticastLease({ transport: "urn:x-nmos:transport:rtp" }), true);
+    assert.equal(p.usesMulticastLease({ transport: p.TRANSPORT_MXL }), false);
+    assert.equal(p.usesMulticastLease({ transport: "urn:x-nmos:transport:websocket" }), false);
+    assert.equal(p.usesMulticastLease({}), false);
+    assert.equal(p.usesMulticastLease(null), false);
+});
