@@ -98,6 +98,9 @@
     // a slim node band (header row above the sender columns / separator row
     // before the receiver rows). Single-device nodes render exactly as
     // before with the combined "<Node> - <Device>" label.
+    // A group takes the position of its first device, and the server sends
+    // devices by crosspoint number, so a node sits at its lowest number and
+    // its devices follow in number order.
     interface CpNodeGroup {
       key:string;
       label:string;
@@ -1316,7 +1319,7 @@
 
       let srcFlows:any[] = [];
       for(let dev of devices){
-        if(dev.num == s.deviceNum){
+        if(dev.num > 0 && dev.num == s.deviceNum){
           for(let type in dev.senders){
             if(type == s.flowType || s.deviceOnly){
               for(let flow of dev.senders[type]){
@@ -1329,7 +1332,7 @@
 
       let dstFlows:any[] = [];
       for(let dev of devices){
-        if(dev.num == d.deviceNum){
+        if(dev.num > 0 && dev.num == d.deviceNum){
           for(let type in dev.receivers){
             if(type == d.flowType || d.deviceOnly){
               for(let flow of dev.receivers[type]){

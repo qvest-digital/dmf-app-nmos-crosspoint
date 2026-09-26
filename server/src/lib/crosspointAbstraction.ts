@@ -2,6 +2,7 @@ import { SyncObject } from "./SyncServer/syncObject";
 import { LoggedError, SyncLog } from "./syncLog";
 import { error } from "console";
 import { matchConnections } from "./connectionMatch";
+import { sortDevices } from "./deviceOrder";
 import { NmosRegistryConnector } from "./nmosConnector";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
@@ -545,8 +546,10 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                     sourceDeviceOnly = true;
                 }
 
+                // -1 is "no number", shared by every unnumbered device, so
+                // it never selects one.
                 for(let dev of this.crosspointState.devices){
-                    if(dev.num == sourceDevice){
+                    if(dev.num > 0 && dev.num == sourceDevice){
                         srcDev = dev;
                         for(let type in dev.senders){
                             if(type == sourceFlowType || sourceDeviceOnly){
@@ -589,7 +592,7 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                 }
 
                 for(let dev of this.crosspointState.devices){
-                    if(dev.num == destinationDevice){
+                    if(dev.num > 0 && dev.num == destinationDevice){
 
                         dstDev = dev;
                         for(let type in dev.receivers){
@@ -1405,6 +1408,10 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
             d.displayTooltip    = composed.tooltip;
             d.displayLabelShort = composed.short;
         }
+
+        // The matrix and the Details page list devices in this order. Sorted
+        // here because the label it falls back to is only composed above.
+        sortDevices(this.crosspointState.devices);
 
         // Pass 2: sender legs + codec, build {flowId → enriched-sender-info}
         // Also collects every ACTIVE sender per (leg index → multicast IP)
