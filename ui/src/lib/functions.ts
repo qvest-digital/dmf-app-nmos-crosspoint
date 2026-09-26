@@ -63,3 +63,22 @@ export function tokenSearch(input:string|any, tokens:string[][], keys:string[]|n
 
     return found;
 }
+
+// ----- Transport family -----
+// The same rule as server/src/lib/transport.ts: every RTP variant is one
+// family, MXL another. The matrix offers a crosspoint only within a family;
+// the server refuses the rest on its own.
+export function transportFamily(transport:string|null|undefined):string{
+    let t = ("" + (transport || "")).trim().toLowerCase();
+    if(t.startsWith("urn:x-nmos:transport:")){ t = t.substring("urn:x-nmos:transport:".length); }
+    if(t === "rtp" || t.startsWith("rtp.")) return "rtp";
+    if(t === "mxl" || t === "websocket" || t === "mqtt") return t;
+    return "";
+}
+
+/** Unknown on either side is not refused: there is nothing to compare. */
+export function transportsCompatible(a:string|null|undefined, b:string|null|undefined):boolean{
+    let fa = transportFamily(a), fb = transportFamily(b);
+    if(fa === "" || fb === "") return true;
+    return fa === fb;
+}
