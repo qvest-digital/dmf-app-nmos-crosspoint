@@ -1437,7 +1437,7 @@ class CrosspointUpdateThread{
 
                     
 
-                    if(p.destination_ip == "" && this.nmosState.sneders.hasOwnProperty(senderId) && this.nmosState.flows.hasOwnProperty(this.nmosState.senders[senderId].flow_id) ){
+                    if(p.destination_ip == "" && this.nmosState.senders.hasOwnProperty(senderId) && this.nmosState.flows.hasOwnProperty(this.nmosState.senders[senderId].flow_id) ){
                         if(!workingOnLeg){
                             // One leg at a time
                             workingOnLeg = true;
