@@ -130,42 +130,115 @@ const rxActive = (flow, sender = null, on = true) => ({
     transport_params: [{ mxl_flow_id: flow, mxl_domain_id: DOMAIN }],
 });
 
-test("receivers taking the sender by name follow it", () => {
-    // The tile receiver as read: running, IS-04 names the sender.
+const none = new Map();
+
+test("a receiver taking the sender by name is pointed at the flow it writes now", () => {
+    // The tile receiver as read: running, IS-04 names the sender. Its /active
+    // still reads the 1080 flow; the sender writes the 720 one.
     const receivers = { [TILE_0]: fx.receivers[TILE_0] };
-    assert.deepEqual(f.mxlReceiversToFollow(SENDER, ep(FLOW_1080), receivers, {}), [TILE_0]);
+    const active = { [TILE_0]: rxActive(FLOW_1080) };
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), receivers, active, none), [TILE_0]);
+    // Named in IS-05 only.
+    const byIs05 = { rx: mxlRx("rx", { active: true, sender_id: null }) };
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), byIs05, { rx: rxActive(FLOW_1080, SENDER) }, none), ["rx"]);
 });
 
-test("receivers taking another sender, switched off, or not MXL are left alone", () => {
+test("a receiver left on an old flow is found with no move seen, as after a restart", () => {
+    // Nothing remembered of the sender: the first read already shows the
+    // new flow. The step rule has nothing to follow ...
+    const first = f.mxlSenderStep(null, ep(FLOW_720), IS04_720);
+    assert.equal(first.action, "none");
+    // ... and the receiver's own /active still says where it is.
+    const receivers = { [TILE_0]: fx.receivers[TILE_0] };
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, first.seen.endpoint, receivers, { [TILE_0]: rxActive(FLOW_1080) }, none), [TILE_0]);
+});
+
+test("a receiver already on the flow, not yet read, or off is not patched", () => {
     const receivers = {
+        on: mxlRx("on", { active: true, sender_id: SENDER }),
+        unread: mxlRx("unread", { active: true, sender_id: SENDER }),
+        disabled: mxlRx("disabled", { active: true, sender_id: SENDER }),
+        stopped: mxlRx("stopped", { active: false, sender_id: SENDER }),
         other: mxlRx("other", { active: true, sender_id: "another-sender" }),
-        off: mxlRx("off", { active: false, sender_id: SENDER }),
         rtp: { ...mxlRx("rtp", { active: true, sender_id: SENDER }), transport: "urn:x-nmos:transport:rtp.mcast" },
-        // IS-05 names another sender, on the same flow id.
-        is05other: mxlRx("is05other", { active: true, sender_id: null }),
     };
-    const active = { is05other: rxActive(FLOW_1080, "another-sender") };
-    assert.deepEqual(f.mxlReceiversToFollow(SENDER, ep(FLOW_1080), receivers, active), []);
+    const active = {
+        on: rxActive(FLOW_720),
+        disabled: rxActive(FLOW_1080, null, false),
+        stopped: rxActive(FLOW_1080),
+        other: rxActive(FLOW_1080),
+        rtp: rxActive(FLOW_1080),
+    };
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), receivers, active, none), []);
+    // Same flow id in another domain is another flow.
+    const moved = { on: { ...rxActive(FLOW_720), transport_params: [{ mxl_flow_id: FLOW_720, mxl_domain_id: "other-domain" }] } };
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), { on: receivers.on }, moved, none), ["on"]);
+});
+
+test("a receiver is re-patched at most once per value of the sender's flow", () => {
+    const receivers = { [TILE_0]: fx.receivers[TILE_0] };
+    const active = { [TILE_0]: rxActive(FLOW_1080) };
+    const patched = new Map([[TILE_0, f.mxlRepatchKey(SENDER, ep(FLOW_720))]]);
+    // Patched to 720 and still reading 1080 -- refused, or not applied yet.
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), receivers, active, patched), []);
+    // The sender moves again: one more attempt.
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_1080 + "-b"), receivers, active, patched), [TILE_0]);
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720, "other-domain"), receivers, active, patched), [TILE_0]);
 });
 
 test("receivers naming no sender follow when they read the flow the sender left", () => {
     const receivers = {
-        byIs05: mxlRx("byIs05", { active: true, sender_id: null }),
         byFlow: mxlRx("byFlow", { active: true, sender_id: null }),
         elsewhere: mxlRx("elsewhere", { active: true, sender_id: null }),
         disabled: mxlRx("disabled", { active: true, sender_id: null }),
         unread: mxlRx("unread", { active: true, sender_id: null }),
+        // Named ones are the level rule's.
+        named: mxlRx("named", { active: true, sender_id: SENDER }),
+        byIs05: mxlRx("byIs05", { active: true, sender_id: null }),
     };
     const active = {
-        byIs05: rxActive(FLOW_720, SENDER),
         byFlow: rxActive(FLOW_1080),
         elsewhere: rxActive(FLOW_720),
         disabled: rxActive(FLOW_1080, null, false),
+        named: rxActive(FLOW_1080),
+        byIs05: rxActive(FLOW_1080, "another-sender"),
     };
-    assert.deepEqual(f.mxlReceiversToFollow(SENDER, ep(FLOW_1080), receivers, active).sort(), ["byFlow", "byIs05"]);
-    // Same flow id in another domain is another flow.
+    assert.deepEqual(f.mxlUnnamedReceiversOnFlow(ep(FLOW_1080), receivers, active), ["byFlow"]);
     const otherDomain = { byFlow: { ...rxActive(FLOW_1080), transport_params: [{ mxl_flow_id: FLOW_1080, mxl_domain_id: "other-domain" }] } };
-    assert.deepEqual(f.mxlReceiversToFollow(SENDER, ep(FLOW_1080), { byFlow: receivers.byFlow }, otherDomain), []);
+    assert.deepEqual(f.mxlUnnamedReceiversOnFlow(ep(FLOW_1080), { byFlow: receivers.byFlow }, otherDomain), []);
+});
+
+test("every running MXL receiver has its /active read, named or not", () => {
+    assert.equal(t.receiverActiveRead(fx.receivers[TILE_0]), true);
+    assert.equal(t.receiverActiveRead(mxlRx("rx", { active: true, sender_id: null })), true);
+    assert.equal(t.receiverActiveRead(mxlRx("rx", { active: false, sender_id: SENDER })), false);
+    // RTP stays as it was: only when naming no sender.
+    const rtp = (sub) => ({ ...mxlRx("rtp", sub), transport: "urn:x-nmos:transport:rtp.mcast" });
+    assert.equal(t.receiverActiveRead(rtp({ active: true, sender_id: SENDER })), false);
+    assert.equal(t.receiverActiveRead(rtp({ active: true, sender_id: null })), true);
+});
+
+test("overlapping /active reads: a late older answer never replaces a newer one", () => {
+    const o = new f.ReadOrder();
+    const a = o.begin(SENDER);
+    const b = o.begin(SENDER);
+    assert.equal(o.take(SENDER, b), true);
+    assert.equal(o.take(SENDER, a), false);
+});
+
+test("overlapping /active reads: the older answer counts when the newer read fails", () => {
+    const o = new f.ReadOrder();
+    const a = o.begin(SENDER);
+    const b = o.begin(SENDER);
+    // a answers first; b then fails and takes nothing. a must have counted.
+    assert.equal(o.take(SENDER, a), true);
+    // And b answering after all still wins over a.
+    assert.equal(o.take(SENDER, b), true);
+    // Senders are ordered separately.
+    const c = o.begin("other");
+    assert.equal(o.take("other", c), true);
+    o.forget(SENDER);
+    assert.equal(o.take(SENDER, o.begin(SENDER)), true);
 });
 
 test("an MXL receiver naming no sender is connected by the flow it reads", () => {

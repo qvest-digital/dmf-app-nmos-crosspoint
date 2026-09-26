@@ -195,3 +195,12 @@ export function receiverNeedsActive(receiver: any): boolean {
     const family = transportFamily(receiver?.transport);
     return !!(sub && sub.active && !sub.sender_id && (family === "rtp" || family === "mxl"));
 }
+
+/** A receiver whose IS-05 /active is kept: one receiverNeedsActive names,
+ *  and any running MXL receiver, whose /active is the only place saying
+ *  which flow it reads (see mxlFollow.mxlReceiversOffFlow). */
+export function receiverActiveRead(receiver: any): boolean {
+    const sub = receiver?.subscription;
+    if (!sub || !sub.active) return false;
+    return receiverNeedsActive(receiver) || transportFamily(receiver?.transport) === "mxl";
+}
