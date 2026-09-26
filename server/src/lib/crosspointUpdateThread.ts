@@ -1,6 +1,7 @@
 import { CrosspointDevice, CrosspointFlow, CrosspointShadowState, CrosspointState, CrosspointShadowDevice } from "./crosspointAbstraction";
 import { ComplexCompare, ShortenNames } from "./functions";
 import { TRANSPORT_MXL } from "./nmosConnectionPatch";
+import { transportFamily, senderIsRedundant, receiverIsRedundant, connectedSenderId } from "./transport";
 
 import { BitrateCalculator } from "./bitrateHelper/BitrateCalculator"
 import { parseSettings } from "./parseSettings";
@@ -969,16 +970,12 @@ class CrosspointUpdateThread{
                                     source.available = true;
                                     source.format = this.getNmosSenderForamt(nmosId);
                                     source.bitrate = this.getNmosSenderBitrate(nmosId);
-                                    if(this.nmosState.senders[nmosId].interface_bindings?.length > 1){
-                                        source.capabilities.dash7 = true;
-                                    }
-                                    if(
-                                        this.nmosState.senders[nmosId].transport == "urn:x-nmos:transport:rtp" ||
-                                        this.nmosState.senders[nmosId].transport == "urn:x-nmos:transport:rtp.mcast"
-                                    ){
-                                        source.capabilities.transport = "rtp";
-                                    }else if(this.nmosState.senders[nmosId].transport == TRANSPORT_MXL){
-                                        source.capabilities.transport = "mxl";
+                                    source.capabilities.dash7 = senderIsRedundant(
+                                        this.nmosState.senders[nmosId],
+                                        this.nmosState.senderActiveData?.[nmosId],
+                                        this.nmosState.sendersManifestDetail?.[nmosId]);
+                                    source.capabilities.transport = transportFamily(this.nmosState.senders[nmosId].transport);
+                                    if(this.nmosState.senders[nmosId].transport == TRANSPORT_MXL){
                                         // No transport file to fetch (manifest_href is null);
                                         // the flow is read from the sender's IS-05 /active.
                                         source.manifestOk = true;
@@ -1038,27 +1035,29 @@ class CrosspointUpdateThread{
                                     
                                 ){
                                     receiver.available = true;
-                                    if(
-                                        this.nmosState.receivers[nmosId].transport == "urn:x-nmos:transport:rtp" ||
-                                        this.nmosState.receivers[nmosId].transport == "urn:x-nmos:transport:rtp.mcast"
-                                    ){
-                                        receiver.capabilities.transport = "rtp";
-                                    }else if(this.nmosState.receivers[nmosId].transport == TRANSPORT_MXL){
-                                        receiver.capabilities.transport = "mxl";
-                                    }
+                                    receiver.capabilities.transport = transportFamily(this.nmosState.receivers[nmosId].transport);
+                                    receiver.capabilities.dash7 = receiverIsRedundant(
+                                        this.nmosState.receivers[nmosId],
+                                        this.nmosState.receiverActiveData?.[nmosId]);
                                     // Same defensive treatment as the sender side — a brand-
                                     // new IS-04 receiver may lack `subscription` or `caps`
                                     // until the registry pushes the full record.
                                     receiver.active = !!this.nmosState.receivers[nmosId].subscription?.active;
                                     receiver.capabilities.mediaTypes = this.nmosState.receivers[nmosId].caps?.media_types || [];
-                                    let sub:any = this.nmosState.receivers[nmosId].subscription;
-                                    if(sub && sub.active && sub.sender_id){
-                                        // Every sender — including the
-                                        // virtual ones registered by
-                                        // NmosNodeRegistration — appears
-                                        // in nmosState.senders, so a single
-                                        // nmos_<id> reference always works.
-                                        let flowRef = "nmos_" + sub.sender_id;
+                                    // Every sender -- including the virtual
+                                    // ones registered by NmosNodeRegistration
+                                    // -- appears in nmosState.senders, so a
+                                    // single nmos_<id> reference always works.
+                                    // A receiver that runs without naming its
+                                    // sender is matched by address, see
+                                    // connectedSenderId.
+                                    let connectedId = connectedSenderId(
+                                        this.nmosState.receivers[nmosId],
+                                        this.nmosState.receiverActiveData?.[nmosId],
+                                        this.nmosState.senderActiveData || {},
+                                        this.nmosState.senders);
+                                    if(connectedId){
+                                        let flowRef = "nmos_" + connectedId;
                                         receiver.connectedFlow = flowRef;
                                         device.connectedFlows.push(flowRef);
                                     }

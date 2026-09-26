@@ -1,6 +1,7 @@
 import { SyncObject } from "./SyncServer/syncObject";
 import { LoggedError, SyncLog } from "./syncLog";
 import { error } from "console";
+import { matchConnections } from "./connectionMatch";
 import { NmosRegistryConnector } from "./nmosConnector";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
@@ -500,6 +501,9 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
 
 
             let connections = [];
+            // Receivers asked for by name that no sender of the request can
+            // feed (transport family). Never switched; a take reports them.
+            let refused = [];
 
 
             list.forEach((c)=>{
@@ -604,64 +608,19 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                 //console.log("Sources:", srcFlows)
                 //console.log("Destiantions:", dstFlows)
                 if((srcFlows.length > 0 || disconnect) && dstFlows.length > 0){
-                    
-                        // Connection Matcher
-
-                        // For Each dstFlow
-                        //      find suitable SrcFlow
-                        //      Type
-                        //      Capabilities
-                        //      Lowest NUM
-
-                        let usedSources = [];
-
-                        for(let dstFlow of dstFlows){
-                            let connection = {src:null,srcDev:srcDev, dst:dstFlow,dstDev:dstDev}
-
-                            if(disconnect){
-                                // src : null
-                            }else{
-                                for(let srcFlow of srcFlows){
-                                    // TODO websocket/mqtt flwos interop
-                                    let connect = false;
-                                    if(dstFlow.type == "audio" && srcFlow.type == "audio"){
-                                        // TODO check for capabilities
-                                        connect = true;
-                                    }else if(dstFlow.type == "video" && srcFlow.type == "video"){
-                                        // TODO check for capabilities
-                                        connect = true;
-                                    }else if(dstFlow.type == "data"){
-                                        if(srcFlow.type == "data"){
-                                            // TODO check for capabilities
-                                            connect = true;
-                                        }
-                                    }else{
-                                        if(dstFlow.type == srcFlow.type){
-                                            connect = true;
-                                        }
-                                    }
-
-                                    if(connect && !usedSources.includes(srcFlow.id)){
-                                        if(connection.src == null){
-                                            connection.src = srcFlow;
-                                            usedSources.push(srcFlow.id);
-                                        }else if(connection.src.num > srcFlow.num){
-                                            usedSources = usedSources.filter((s)=>{
-                                                if(s.id == connection.src.id){
-                                                    return false;
-                                                }else{
-                                                    return true;
-                                                }
-                                            })
-                                            connection.src = srcFlow;
-                                        }
-                                    }
-                                
-                            }
-                            }
- 
-                            connections.push(connection);
-                        }
+                    // Type, transport family, lowest num -- see matchConnections.
+                    let matched = matchConnections(srcFlows, dstFlows, disconnect);
+                    matched.connections.forEach((m)=>{
+                        connections.push({src:m.src, srcDev:srcDev, dst:m.dst, dstDev:dstDev});
+                    });
+                    // Reported only for a receiver asked for by name. On a
+                    // device-level request the rest of the device is simply
+                    // not part of it, as with a missing essence.
+                    if(!destinationDeviceOnly){
+                        matched.refused.forEach((dst)=>{
+                            refused.push({src:null, dst:dst, dstDev:dstDev});
+                        });
+                    }
                 }
 
             });
@@ -716,6 +675,13 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                         connectionResponses.push(r.reason);
                     }
                 })
+
+                refused.forEach((r)=>{
+                    let message = "Transport mismatch: no sender in this request can feed " +
+                        (r.dst.capabilities?.transport || "this") + " receiver " + (r.dst.alias || r.dst.name || r.dst.id) + ".";
+                    let log = SyncLog.log("warning", "connect_crosspoint", message, {receiver:r.dst.id});
+                    connectionResponses.push({src:null, dst:r.dst, status:"failed", detail:{message, log}});
+                });
 
                 resolve({connections:connectionResponses});
             }
@@ -962,6 +928,7 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                 receivers: s.receivers,
                 flows: s.flows,
                 senderActiveData: s.senderActiveData,
+                receiverActiveData: s.receiverActiveData,
                 sendersManifestDetail: s.sendersManifestDetail,
             } : s;
             this.workerNeedsNmosState = false;
