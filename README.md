@@ -12,7 +12,7 @@ Tested with a wide range of devices — Lawo, Riedel, Embrionix, AJA, Imagine, S
 ## What it does 
 - **Autodiscover.** Finds Senders and Receivers according to NMOS IS-04
 - **Registry discovery.** Finds the NMOS registry on its own: unicast DNS-SD against the DNS search domain first, mDNS as fallback, and a static IP always wins when one is configured. The Setup page shows the detected domain, the discovered registry with its source and priority, and the live state of the query subscriptions.
-- **Crosspoint matrix.** Click a sender and a receiver to connect them according to NMOS IS-05. Autotake or "stage and then TAKE" workflow.
+- **Crosspoint matrix.** Click a sender and a receiver to connect them according to NMOS IS-05. Autotake or "stage and then TAKE" workflow. Each sender and receiver shows its transport: ST 2110 (split in two tones for ST 2022-7) or MXL. Only senders and receivers of the same transport family can be crosspointed. A receiver connected by transport file alone, with no sender id in IS-04 or IS-05, is matched to its sender by multicast group, port and source. The Show menu filters by availability, hidden state, essence and transport.
 - **Activate / Deactivate Senders.** Toggle a Sender to be master enabled=true/false. (option) 
 - **Multicast DHCP.** Hands out and tracks multicast addresses automatically from a pool you define. (option) 
 - **Manual multicast editing.** Each sender's leg can be overridden with a custom address on the Details page; clearing the field falls back to the DHCP-reserved one. 
@@ -169,3 +169,4 @@ In `/server` and `/ui` each run `npm install && npm run dev` — the server rest
 
 The **Logs** page in the nav shows the live server log stream; `http://<host>/debug` exposes the full live state for tracing connection or patch behaviour.
 
+MXL is a trademark of LF Projects, LLC. The MXL logo is used unmodified from [dmf-mxl/mxl-logos](https://github.com/dmf-mxl/mxl-logos).
