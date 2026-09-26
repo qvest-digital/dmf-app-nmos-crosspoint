@@ -962,6 +962,7 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                 receivers: s.receivers,
                 flows: s.flows,
                 senderActiveData: s.senderActiveData,
+                receiverActiveData: s.receiverActiveData,
                 sendersManifestDetail: s.sendersManifestDetail,
             } : s;
             this.workerNeedsNmosState = false;

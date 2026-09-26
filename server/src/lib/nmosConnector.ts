@@ -23,6 +23,7 @@ import { CrosspointAbstraction, CrosspointConnectionSenderInfo } from "./crosspo
 import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, tryNextControl } from "./nmosConnectionPatch";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
+import { receiverNeedsActive } from "./transport";
 
 const fs = require("fs");
 
@@ -396,6 +397,9 @@ export class NmosRegistryConnector {
         flows: {},
         nodes: {},
         senderActiveData:{},
+        // IS-05 /active of the RTP receivers that run without naming their
+        // sender in IS-04 (see transport.connectedSenderId); nobody else.
+        receiverActiveData:{},
         channelmapping:{},
         sendersManifestDetail :{}
     };
@@ -579,7 +583,7 @@ export class NmosRegistryConnector {
         // every subscribed client.
         this.nmosState = {
             devices: {}, sources: {}, senders: {}, receivers: {},
-            flows: {}, nodes: {}, senderActiveData: {}, channelmapping: {},
+            flows: {}, nodes: {}, senderActiveData: {}, receiverActiveData: {}, channelmapping: {},
             sendersManifestDetail: {}
         };
         // Cancel any pending coalesced sync and push the empty state right
@@ -698,6 +702,9 @@ export class NmosRegistryConnector {
                 " the registry no longer has.", { ids: removed.slice(0, 20) });
             if(type === "nodes"){
                 removed.forEach((id)=>{ try{ DdnsService.instance?.removeNode(id).catch(()=>{}); }catch(e){} });
+            }
+            if(type === "receivers"){
+                removed.forEach((id)=>{ delete this.nmosState.receiverActiveData[id]; });
             }
             this.scheduleSyncNmos();
             // Same follow-up as a removal grain: without this the crosspoint
@@ -857,6 +864,9 @@ export class NmosRegistryConnector {
                         setTimeout(()=>{
                             this.getSenderActive(type, g);
                         },100);
+                    }
+                    if(type == "receivers"){
+                        this.scheduleReceiverActive(g);
                     }
                 });
 
@@ -1149,6 +1159,63 @@ export class NmosRegistryConnector {
                         this.updateCrosspoint();
                     } catch (e) {}
                     
+                }
+            }
+        }
+    }
+
+    // Pending receiver /active reads keyed by receiver id, coalesced like the
+    // manifest fetches.
+    private receiverActiveTimers: Map<string, any> = new Map();
+
+    /**
+     * Keep receiverActiveData in step with one receiver grain. Only a running
+     * RTP receiver whose IS-04 subscription names no sender is read: for every
+     * other receiver the registry already says what it takes, and reading
+     * /active for all of them would cost one request per receiver per grain.
+     */
+    scheduleReceiverActive(g:any, delay = 100){
+        if(!g || typeof g.path !== "string") return;
+        let receiverId = g.path;
+        let post = (g.hasOwnProperty("post") && typeof g.post == "object") ? g.post : null;
+        if(!post || !receiverNeedsActive(post)){
+            if(this.nmosState.receiverActiveData[receiverId]){
+                delete this.nmosState.receiverActiveData[receiverId];
+                this.updateCrosspoint();
+            }
+            return;
+        }
+        let existing = this.receiverActiveTimers.get(receiverId);
+        if(existing){ clearTimeout(existing); }
+        this.receiverActiveTimers.set(receiverId, setTimeout(()=>{
+            this.receiverActiveTimers.delete(receiverId);
+            this.getReceiverActive(receiverId);
+        }, delay));
+    }
+
+    async getReceiverActive(receiverId:string){
+        let hrefs:{href:string, version:string}[] = [];
+        try{
+            let receiver:any = this.nmosState.receivers[receiverId];
+            let device:any = this.nmosState.devices[receiver.device_id];
+            hrefs = selectControlHrefs(device.controls);
+        }catch(e){}
+        if(hrefs.length == 0){ return; }
+        for(let href of hrefs){
+            try{
+                let response = await axios.get(joinHref(href.href, "single/receivers/" + receiverId + "/active"), {timeout:10000});
+                // Gone or connected by name in the meantime: drop, do not keep.
+                if(!receiverNeedsActive(this.nmosState.receivers[receiverId])){
+                    delete this.nmosState.receiverActiveData[receiverId];
+                }else{
+                    this.nmosState.receiverActiveData[receiverId] = response.data;
+                }
+                this.updateCrosspoint();
+                return;
+            }catch(e:any){
+                if(!tryNextControl(e)){
+                    SyncLog.log("warn", "NMOS", "Can not get active configuration of receiver: " + receiverId, {error: e?.message, href: href.href});
+                    return;
                 }
             }
         }
