@@ -11,7 +11,7 @@
  * now, whenever either /active is read (mxlReceiversOffFlow), so nothing has
  * to have been seen before. A receiver naming no sender is linked to one only
  * by the flow it reads, so it follows when a move is seen (mxlSenderStep,
- * mxlUnnamedReceiversOnFlow).
+ * mxlUnnamedReceiversOnFlow). mxlRepatchTargets combines the two.
  *
  * Not gated by reconnectReceiversOnSenderChange. That setting decides whether
  * an RTP receiver is activated again with a sender's changed SDP; left alone,
@@ -133,29 +133,70 @@ export function mxlUnnamedReceiversOnFlow(from: MxlEndpoint, receivers: { [id: s
 }
 
 /**
+ * The receivers to re-patch onto `endpoint`, the flow `senderId` writes now,
+ * with `patched` brought up to date. Targets are the mxlReceiversOffFlow ones
+ * plus those of `unnamed` (see mxlUnnamedReceiversOnFlow) not already patched
+ * to this value; each is claimed in `patched` before the PATCH goes out, so a
+ * read landing meanwhile does not send a second one, and the claim is kept
+ * when the PATCH fails, so a receiver refusing the flow is not asked again
+ * while the sender stays on it. A receiver patched for this sender and seen
+ * reading the flow it writes now has its claim dropped: it is where it
+ * belongs, and if the sender moves again it is asked again, also to a flow it
+ * refused before.
+ *
+ * @param patched mxlRepatchKey of the last re-patch per receiver id, updated
+ */
+export function mxlRepatchTargets(senderId: string, endpoint: MxlEndpoint, receivers: { [id: string]: any },
+    receiverActiveData: { [id: string]: any }, patched: Map<string, string>, unnamed: string[] = []): string[] {
+    for (const [id, claim] of Array.from(patched)) {
+        if (!claim.startsWith(senderId + "|")) continue;
+        if (mxlReceiverReads(receiverActiveData ? receiverActiveData[id] : null, endpoint)) patched.delete(id);
+    }
+    const key = mxlRepatchKey(senderId, endpoint);
+    const ids = mxlReceiversOffFlow(senderId, endpoint, receivers, receiverActiveData, patched);
+    for (const id of unnamed) {
+        if (!ids.includes(id) && patched.get(id) !== key) ids.push(id);
+    }
+    for (const id of ids) patched.set(id, key);
+    return ids;
+}
+
+/**
  * Orders overlapping reads of one resource. An answer is taken when no later
  * read has been taken yet, so a late answer to an older read cannot replace a
- * newer one, and an older answer still counts when the newer read fails.
+ * newer one, and an older answer still counts when the newer read fails. A
+ * read begun before the resource was forgotten is never taken: its answer
+ * describes something that is gone, or an earlier life of it.
  */
 export class ReadOrder {
-    private issued = new Map<string, number>();
+    private last = 0;
+    // First read begun on each key since it was last forgotten.
+    private first = new Map<string, number>();
     private taken = new Map<string, number>();
 
     begin(key: string): number {
-        const seq = (this.issued.get(key) || 0) + 1;
-        this.issued.set(key, seq);
+        const seq = ++this.last;
+        if (!this.first.has(key)) this.first.set(key, seq);
         return seq;
     }
 
     /** Whether the answer to read `seq` is taken; records it when it is. */
     take(key: string, seq: number): boolean {
+        const first = this.first.get(key);
+        if (first === undefined || seq < first) return false;
         if (seq <= (this.taken.get(key) || 0)) return false;
         this.taken.set(key, seq);
         return true;
     }
 
     forget(key: string) {
-        this.issued.delete(key);
+        this.first.delete(key);
         this.taken.delete(key);
+    }
+
+    /** Forget every key. */
+    clear() {
+        this.first.clear();
+        this.taken.clear();
     }
 }

@@ -186,6 +186,43 @@ test("a receiver is re-patched at most once per value of the sender's flow", () 
     assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720, "other-domain"), receivers, active, patched), [TILE_0]);
 });
 
+test("a receiver refusing a flow is asked once while the sender stays on it", () => {
+    const receivers = { [TILE_0]: fx.receivers[TILE_0] };
+    const patched = new Map();
+    const on1080 = { [TILE_0]: rxActive(FLOW_1080) };
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched), [TILE_0]);
+    // Refused: still on 1080. Every further read of either side sends nothing.
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched), []);
+    assert.equal(patched.get(TILE_0), f.mxlRepatchKey(SENDER, ep(FLOW_720)));
+});
+
+test("a receiver that refused a flow is asked again when the sender comes back to it", () => {
+    const receivers = { [TILE_0]: fx.receivers[TILE_0] };
+    const patched = new Map();
+    const on1080 = { [TILE_0]: rxActive(FLOW_1080) };
+    // 1080 -> 720, refused.
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched), [TILE_0]);
+    // Back to 1080, where the receiver still is: nothing to send.
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_1080), receivers, on1080, patched), []);
+    // 720 again: the receiver reads a flow nobody writes, so it is asked again.
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched), [TILE_0]);
+});
+
+test("an unnamed receiver that refused a flow is asked again on the next move to it", () => {
+    const receivers = { rx: mxlRx("rx", { active: true, sender_id: null }) };
+    const patched = new Map();
+    const on1080 = { rx: rxActive(FLOW_1080) };
+    const unnamed = () => f.mxlUnnamedReceiversOnFlow(ep(FLOW_1080), receivers, on1080);
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched, unnamed()), ["rx"]);
+    // Refused; the sender goes back to 1080 and then to 720 again.
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_1080), receivers, on1080, patched), []);
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched, unnamed()), ["rx"]);
+    // A claim for another sender is left alone.
+    patched.set("rx", f.mxlRepatchKey("another-sender", ep(FLOW_1080)));
+    f.mxlRepatchTargets(SENDER, ep(FLOW_1080), receivers, on1080, patched);
+    assert.equal(patched.get("rx"), f.mxlRepatchKey("another-sender", ep(FLOW_1080)));
+});
+
 test("receivers naming no sender follow when they read the flow the sender left", () => {
     const receivers = {
         byFlow: mxlRx("byFlow", { active: true, sender_id: null }),
@@ -239,6 +276,22 @@ test("overlapping /active reads: the older answer counts when the newer read fai
     assert.equal(o.take("other", c), true);
     o.forget(SENDER);
     assert.equal(o.take(SENDER, o.begin(SENDER)), true);
+});
+
+test("overlapping /active reads: an answer arriving after the sender was removed is dropped", () => {
+    const o = new f.ReadOrder();
+    const old = o.begin(SENDER);
+    o.forget(SENDER);
+    assert.equal(o.take(SENDER, old), false);
+    // Registered again: the read begun for the earlier sender still does not
+    // count, the new one does.
+    const fresh = o.begin(SENDER);
+    assert.equal(o.take(SENDER, old), false);
+    assert.equal(o.take(SENDER, fresh), true);
+    // A registry switch forgets every sender.
+    const before = o.begin("other");
+    o.clear();
+    assert.equal(o.take("other", before), false);
 });
 
 test("an MXL receiver naming no sender is connected by the flow it reads", () => {
