@@ -20,7 +20,7 @@ import * as jsonpatch from 'fast-json-patch';
 
 import * as sdpTransform from 'sdp-transform';
 import { CrosspointAbstraction, CrosspointConnectionSenderInfo } from "./crosspointAbstraction";
-import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, tryNextControl } from "./nmosConnectionPatch";
+import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, buildSenderEnablePatch, tryNextControl } from "./nmosConnectionPatch";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
 import { receiverNeedsActive } from "./transport";
@@ -1897,23 +1897,7 @@ export class NmosRegistryConnector {
                     }
                 }
             }catch(e){}
-            if(legCount < 1){ legCount = 1; }
-
-            let rtpEnabled = !disable;
-            let transportParams:any[] = [];
-            for(let i=0;i<legCount;i++){
-                transportParams.push({ rtp_enabled: rtpEnabled });
-            }
-
-            let patch:any = {
-                "receiver_id": null,
-                "master_enable": !disable,
-                "activation": {
-                    "mode": "activate_immediate",
-                    "requested_time": null,
-                },
-                "transport_params": transportParams
-            };
+            let patch:any = buildSenderEnablePatch(sender.transport, legCount, disable);
 
 
             for(let href of controlHrefs){

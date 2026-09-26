@@ -100,6 +100,27 @@ export function buildMxlDisconnectPatch(): any {
     };
 }
 
+/**
+ * The staged PATCH switching a sender on or off without changing where it
+ * sends. An RTP sender gets rtp_enabled on every leg. Any other sender gets no
+ * transport_params: rtp_enabled is not one of its parameters (MXL, WebSocket,
+ * MQTT), and a device answers a parameter outside its constraints with 400.
+ * Takes the IS-04 transport URN.
+ */
+export function buildSenderEnablePatch(transport: string, legCount: number, disable: boolean): any {
+    const patch: any = {
+        receiver_id: null,
+        master_enable: !disable,
+        activation: { mode: "activate_immediate" },
+    };
+    if (!transportKind(transport).startsWith("rtp")) return patch;
+    patch.transport_params = [];
+    for (let i = 0; i < Math.max(1, legCount); i++) {
+        patch.transport_params.push({ rtp_enabled: !disable });
+    }
+    return patch;
+}
+
 export interface SdpLeg {
     multicast_ip: string,
     destination_port: number,
