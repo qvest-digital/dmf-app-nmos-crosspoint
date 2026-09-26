@@ -133,10 +133,10 @@ const rxActive = (flow, sender = null, on = true) => ({
 const none = new Map();
 
 test("a receiver taking the sender by name is pointed at the flow it writes now", () => {
-    // The tile receiver as read: running, IS-04 names the sender. Its /active
-    // still reads the 1080 flow; the sender writes the 720 one.
+    // The tile receiver as read: running, IS-04 and IS-05 name the sender.
+    // Its /active still reads the 1080 flow; the sender writes the 720 one.
     const receivers = { [TILE_0]: fx.receivers[TILE_0] };
-    const active = { [TILE_0]: rxActive(FLOW_1080) };
+    const active = { [TILE_0]: rxActive(FLOW_1080, SENDER) };
     assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), receivers, active, none), [TILE_0]);
     // Named in IS-05 only.
     const byIs05 = { rx: mxlRx("rx", { active: true, sender_id: null }) };
@@ -150,7 +150,7 @@ test("a receiver left on an old flow is found with no move seen, as after a rest
     assert.equal(first.action, "none");
     // ... and the receiver's own /active still says where it is.
     const receivers = { [TILE_0]: fx.receivers[TILE_0] };
-    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, first.seen.endpoint, receivers, { [TILE_0]: rxActive(FLOW_1080) }, none), [TILE_0]);
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, first.seen.endpoint, receivers, { [TILE_0]: rxActive(FLOW_1080, SENDER) }, none), [TILE_0]);
 });
 
 test("a receiver already on the flow, not yet read, or off is not patched", () => {
@@ -163,21 +163,21 @@ test("a receiver already on the flow, not yet read, or off is not patched", () =
         rtp: { ...mxlRx("rtp", { active: true, sender_id: SENDER }), transport: "urn:x-nmos:transport:rtp.mcast" },
     };
     const active = {
-        on: rxActive(FLOW_720),
-        disabled: rxActive(FLOW_1080, null, false),
-        stopped: rxActive(FLOW_1080),
-        other: rxActive(FLOW_1080),
-        rtp: rxActive(FLOW_1080),
+        on: rxActive(FLOW_720, SENDER),
+        disabled: rxActive(FLOW_1080, SENDER, false),
+        stopped: rxActive(FLOW_1080, SENDER),
+        other: rxActive(FLOW_1080, "another-sender"),
+        rtp: rxActive(FLOW_1080, SENDER),
     };
     assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), receivers, active, none), []);
     // Same flow id in another domain is another flow.
-    const moved = { on: { ...rxActive(FLOW_720), transport_params: [{ mxl_flow_id: FLOW_720, mxl_domain_id: "other-domain" }] } };
+    const moved = { on: { ...rxActive(FLOW_720, SENDER), transport_params: [{ mxl_flow_id: FLOW_720, mxl_domain_id: "other-domain" }] } };
     assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), { on: receivers.on }, moved, none), ["on"]);
 });
 
 test("a receiver is re-patched at most once per value of the sender's flow", () => {
     const receivers = { [TILE_0]: fx.receivers[TILE_0] };
-    const active = { [TILE_0]: rxActive(FLOW_1080) };
+    const active = { [TILE_0]: rxActive(FLOW_1080, SENDER) };
     const patched = new Map([[TILE_0, f.mxlRepatchKey(SENDER, ep(FLOW_720))]]);
     // Patched to 720 and still reading 1080 -- refused, or not applied yet.
     assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), receivers, active, patched), []);
@@ -189,7 +189,7 @@ test("a receiver is re-patched at most once per value of the sender's flow", () 
 test("a receiver refusing a flow is asked once while the sender stays on it", () => {
     const receivers = { [TILE_0]: fx.receivers[TILE_0] };
     const patched = new Map();
-    const on1080 = { [TILE_0]: rxActive(FLOW_1080) };
+    const on1080 = { [TILE_0]: rxActive(FLOW_1080, SENDER) };
     assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched), [TILE_0]);
     // Refused: still on 1080. Every further read of either side sends nothing.
     assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched), []);
@@ -199,7 +199,7 @@ test("a receiver refusing a flow is asked once while the sender stays on it", ()
 test("a receiver that refused a flow is asked again when the sender comes back to it", () => {
     const receivers = { [TILE_0]: fx.receivers[TILE_0] };
     const patched = new Map();
-    const on1080 = { [TILE_0]: rxActive(FLOW_1080) };
+    const on1080 = { [TILE_0]: rxActive(FLOW_1080, SENDER) };
     // 1080 -> 720, refused.
     assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, on1080, patched), [TILE_0]);
     // Back to 1080, where the receiver still is: nothing to send.
@@ -237,7 +237,7 @@ test("receivers naming no sender follow when they read the flow the sender left"
         byFlow: rxActive(FLOW_1080),
         elsewhere: rxActive(FLOW_720),
         disabled: rxActive(FLOW_1080, null, false),
-        named: rxActive(FLOW_1080),
+        named: rxActive(FLOW_1080, SENDER),
         byIs05: rxActive(FLOW_1080, "another-sender"),
     };
     assert.deepEqual(f.mxlUnnamedReceiversOnFlow(ep(FLOW_1080), receivers, active), ["byFlow"]);
@@ -314,13 +314,25 @@ const S2 = "7a6b5c4d-3e2f-5a1b-9c8d-7e6f5a4b3c2d";
 const FLOW_S2 = "1f2e3d4c-5b6a-5f7e-8d9c-0b1a2f3e4d5c";
 const mxlSender = (id) => ({ ...fx.senders[SENDER], id });
 
-test("the sender a receiver takes is the one its /active names, IS-04 only when /active names none", () => {
-    assert.equal(f.mxlNamedSender({ sender_id: SENDER }, { sender_id: null }), SENDER);
+test("the sender a receiver takes is the one its /active names, IS-04 only while /active is unknown", () => {
     assert.equal(f.mxlNamedSender({ sender_id: null }, { sender_id: S2 }), S2);
     assert.equal(f.mxlNamedSender({ sender_id: SENDER }, { sender_id: SENDER }), SENDER);
+    assert.equal(f.mxlNamedSender({ sender_id: SENDER }, { sender_id: S2 }), S2);
+    // /active names none: it takes none, whatever IS-04 still says.
+    assert.equal(f.mxlNamedSender({ sender_id: SENDER }, { sender_id: null }), "");
+    assert.equal(f.mxlNamedSender({ sender_id: SENDER }, {}), "");
+    // /active not read yet.
+    assert.equal(f.mxlNamedSender({ sender_id: SENDER }, undefined), SENDER);
     assert.equal(f.mxlNamedSender({ sender_id: null }, null), "");
-    // Both name one and they differ: not known which it takes.
-    assert.equal(f.mxlNamedSender({ sender_id: SENDER }, { sender_id: S2 }), null);
+});
+
+test("a receiver IS-04 names but whose /active names no sender is not taken by name", () => {
+    // Another controller connected it by flow alone; IS-04 lags.
+    const receivers = { rx: mxlRx("rx", { active: true, sender_id: SENDER }) };
+    const active = { rx: rxActive(FLOW_S2) };
+    assert.deepEqual(f.mxlReceiversOffFlow(SENDER, ep(FLOW_720), receivers, active, none), []);
+    // It counts as naming none, so the edge rule may move it off a flow left.
+    assert.deepEqual(f.mxlUnnamedReceiversOnFlow(ep(FLOW_S2), receivers, active), ["rx"]);
 });
 
 test("a receiver IS-04 names for one sender but /active routes to another is left where it is", () => {
@@ -340,12 +352,14 @@ test("a receiver is checked again just before its PATCH", () => {
     const check = (rx, active, from = null, sa = senderActiveData) =>
         f.mxlRepatchEligible(SENDER, ep(FLOW_720), rx, active, from, senders, sa);
     // Still on the old flow, still taking the sender: patched.
-    assert.equal(check(named, rxActive(FLOW_1080)), true);
+    assert.equal(check(named, rxActive(FLOW_1080, SENDER)), true);
     // Disconnected by the operator meanwhile: /active unknown, or off.
     assert.equal(check(named, undefined), false);
     assert.equal(check(named, null), false);
-    assert.equal(check(named, rxActive(FLOW_1080, null, false)), false);
-    assert.equal(check(mxlRx("rx", { active: false, sender_id: SENDER }), rxActive(FLOW_1080)), false);
+    assert.equal(check(named, rxActive(FLOW_1080, SENDER, false)), false);
+    assert.equal(check(mxlRx("rx", { active: false, sender_id: SENDER }), rxActive(FLOW_1080, SENDER)), false);
+    // Disconnected by name only: /active names no sender any more.
+    assert.equal(check(named, rxActive(FLOW_1080)), false);
     // Routed to another sender meanwhile.
     assert.equal(check(named, rxActive(FLOW_S2, S2)), false);
     // Already on the flow.
@@ -357,7 +371,7 @@ test("a receiver is checked again just before its PATCH", () => {
     // ... and no other sender has started writing it.
     assert.equal(check(unnamed, rxActive(FLOW_1080), ep(FLOW_1080), { ...senderActiveData, [S2]: senderActive(FLOW_1080) }), false);
     // Not MXL.
-    assert.equal(check({ ...named, transport: "urn:x-nmos:transport:rtp.mcast" }, rxActive(FLOW_1080)), false);
+    assert.equal(check({ ...named, transport: "urn:x-nmos:transport:rtp.mcast" }, rxActive(FLOW_1080, SENDER)), false);
 });
 
 test("receivers naming no sender stay on a flow another sender still writes", () => {
@@ -404,13 +418,64 @@ test("only a receiver refusing the flow keeps its claim", () => {
     assert.equal(settle("skipped", other), other);
 });
 
-test("a released claim lets the next read try again", () => {
+test("a released claim is tried again once its backoff is over, not before", () => {
     const receivers = { [TILE_0]: fx.receivers[TILE_0] };
-    const active = { [TILE_0]: rxActive(FLOW_1080) };
+    const active = { [TILE_0]: rxActive(FLOW_1080, SENDER) };
     const patched = new Map();
-    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, active, patched), [TILE_0]);
-    f.mxlSettleClaim(patched, TILE_0, f.mxlRepatchKey(SENDER, ep(FLOW_720)), { error: new Error("ETIMEDOUT") });
-    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, active, patched), [TILE_0]);
+    const retry = new Map();
+    const key = f.mxlRepatchKey(SENDER, ep(FLOW_720));
+    const targets = (now) => f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, active, patched, [], retry, now);
+    const fail = (now) => f.mxlSettleClaim(patched, TILE_0, key, { error: { status: 503 } }, key, retry, now);
+    assert.deepEqual(targets(0), [TILE_0]);
+    fail(1000);
+    // Every read of the sender or a sibling receiver looks again: not yet.
+    assert.deepEqual(targets(1000), []);
+    assert.deepEqual(targets(30999), []);
+    assert.deepEqual(targets(31000), [TILE_0]);
+    // Failing again doubles the wait.
+    fail(31000);
+    assert.deepEqual(targets(90999), []);
+    assert.deepEqual(targets(91000), [TILE_0]);
+    // ... up to 10 min.
+    let now = 91000;
+    for (let i = 0; i < 10; i++) { fail(now); now = retry.get(TILE_0).due; targets(now); }
+    assert.equal(retry.get(TILE_0).wait, 600000);
+    // Taken: the backoff is gone.
+    f.mxlSettleClaim(patched, TILE_0, key, "patched", key, retry, now);
+    assert.equal(retry.has(TILE_0), false);
+});
+
+test("a receiver seen on its sender's flow starts a later backoff afresh", () => {
+    const receivers = { [TILE_0]: fx.receivers[TILE_0] };
+    const patched = new Map();
+    const retry = new Map([[TILE_0, { due: 500000, wait: 480000 }]]);
+    // Somebody else got it onto the flow meanwhile.
+    f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, { [TILE_0]: rxActive(FLOW_720, SENDER) }, patched, [], retry, 1000);
+    assert.equal(retry.has(TILE_0), false);
+    // The sender moves; the receiver is asked at once.
+    assert.deepEqual(f.mxlRepatchTargets(SENDER, ep(FLOW_1080), receivers, { [TILE_0]: rxActive(FLOW_720, SENDER) }, patched, [], retry, 1000), [TILE_0]);
+    // A stopped receiver's backoff is dropped.
+    const stopped = new Map([["gone", { due: 9e9, wait: 60000 }]]);
+    f.mxlRepatchTargets(SENDER, ep(FLOW_720), receivers, {}, new Map(), [], stopped, 0);
+    assert.equal(stopped.has("gone"), false);
+});
+
+test("the flow a sender left is kept until its unnamed followers have moved", () => {
+    const receivers = { rx: mxlRx("rx", { active: true, sender_id: null }) };
+    const senders = { [SENDER]: mxlSender(SENDER) };
+    const sa = { [SENDER]: senderActive(FLOW_720) };
+    const pend = (pending, stepFrom, active) => f.mxlPendingFollow(SENDER, pending, stepFrom, receivers, active, senders, sa);
+    // The move is seen: the follower is due, the flow left is kept.
+    const first = pend(null, ep(FLOW_1080), { rx: rxActive(FLOW_1080) });
+    assert.deepEqual(first, { from: ep(FLOW_1080), unnamed: ["rx"] });
+    // Its PATCH failed: a later read with no move still finds it.
+    assert.deepEqual(pend(first.from, null, { rx: rxActive(FLOW_1080) }), { from: ep(FLOW_1080), unnamed: ["rx"] });
+    // It moved: nothing is kept.
+    assert.deepEqual(pend(first.from, null, { rx: rxActive(FLOW_720, SENDER) }), { from: null, unnamed: [] });
+    // Nothing pending, no move.
+    assert.deepEqual(pend(null, null, { rx: rxActive(FLOW_1080) }), { from: null, unnamed: [] });
+    // A new move replaces the flow kept.
+    assert.deepEqual(pend(ep("older"), ep(FLOW_1080), { rx: rxActive(FLOW_1080) }).from, ep(FLOW_1080));
 });
 
 test("the claim of a receiver that stopped running or is gone is dropped", () => {
