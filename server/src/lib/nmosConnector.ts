@@ -20,11 +20,11 @@ import * as jsonpatch from 'fast-json-patch';
 
 import * as sdpTransform from 'sdp-transform';
 import { CrosspointAbstraction, CrosspointConnectionSenderInfo } from "./crosspointAbstraction";
-import { SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, resolvedMxlEndpoint, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, buildSenderEnablePatch, usesMulticastLease, hasRtpDestination, tryNextControl } from "./nmosConnectionPatch";
+import { MxlEndpoint, SR_CTRL_TYPES, TRANSPORT_MXL, selectControlHrefs, transportKind, joinHref, mxlEndpointFromActive, resolvedMxlEndpoint, buildMxlReceiverPatch, buildMxlDisconnectPatch, buildRtpTransportParams, buildSenderEnablePatch, usesMulticastLease, hasRtpDestination, tryNextControl } from "./nmosConnectionPatch";
 import { MulticastLeaseManager } from "./multicastLeaseManager";
 import { DdnsService } from "./ddnsService";
-import { receiverActiveRead, mxlReceiverReads, transportFamily } from "./transport";
-import { MxlSenderSeen, mxlSenderStep, mxlUnnamedReceiversOnFlow, mxlRepatchTargets, ReadOrder } from "./mxlFollow";
+import { receiverActiveRead, transportFamily } from "./transport";
+import { MxlSenderSeen, mxlSenderStep, mxlUnnamedFollowers, mxlRepatchTargets, mxlRepatchKey, mxlRepatchEligible, mxlSettleClaim, mxlNamedSender, receiverActiveChanged, ReadOrder } from "./mxlFollow";
 
 const fs = require("fs");
 
@@ -1217,44 +1217,86 @@ export class NmosRegistryConnector {
             }, 2000);
         }
         let unnamed:string[] = [];
-        if(step.action === "follow"){
-            unnamed = mxlUnnamedReceiversOnFlow(step.from, this.nmosState.receivers, this.nmosState.receiverActiveData);
-            SyncLog.log("info", "NMOS", "MXL sender " + senderId + " moved from flow " + step.from.flowId + " to " + step.seen.endpoint.flowId + ".",
-                {senderId, from:step.from, to:step.seen.endpoint});
+        let from = step.action === "follow" ? step.from : null;
+        if(from){
+            unnamed = mxlUnnamedFollowers(senderId, from, this.nmosState.receivers, this.nmosState.receiverActiveData,
+                this.nmosState.senders, this.nmosState.senderActiveData);
+            SyncLog.log("info", "NMOS", "MXL sender " + senderId + " moved from flow " + from.flowId + " to " + step.seen.endpoint.flowId + ".",
+                {senderId, from, to:step.seen.endpoint});
         }
-        this.repointMxlReceivers(senderId, unnamed);
+        this.repointMxlReceivers(senderId, unnamed, from);
     }
 
     /**
      * Point at the flow `senderId` writes now every MXL receiver taking it by
-     * name but reading another (mxlReceiversOffFlow), plus `unnamed`. Runs on
-     * every /active read of the sender or of such a receiver.
+     * name but reading another (mxlReceiversOffFlow), plus `unnamed`, which
+     * read `from`, the flow the sender has just left. Runs on every /active
+     * read of the sender or of such a receiver.
      */
-    private repointMxlReceivers(senderId:string, unnamed:string[] = []){
+    private repointMxlReceivers(senderId:string, unnamed:string[] = [], from:MxlEndpoint|null = null){
         let endpoint = resolvedMxlEndpoint(this.nmosState.senderActiveData[senderId]);
         if(!endpoint){ return; }
         let ids = mxlRepatchTargets(senderId, endpoint, this.nmosState.receivers, this.nmosState.receiverActiveData, this.mxlRepatched, unnamed);
         if(ids.length == 0){ return; }
-        this.sendMxlRepatch(senderId, ids).catch(()=>{});
+        this.sendMxlRepatch(senderId, ids, mxlRepatchKey(senderId, endpoint), from).catch(()=>{});
     }
 
-    private async sendMxlRepatch(senderId:string, receiverIds:string[]){
+    /**
+     * Re-patch `receiverIds`, claimed under `key` by mxlRepatchTargets, and
+     * settle each claim (mxlSettleClaim).
+     */
+    private async sendMxlRepatch(senderId:string, receiverIds:string[], key:string, from:MxlEndpoint|null){
         // Read /active again rather than use the stored one, so a move in
         // the meantime is not undone.
         let info = await this.connectionGetSenderInfo(senderId);
         if(info.error == "" && !info.mxlEnabled){ info.error = "sender is switched off"; }
         if(info.error != ""){
             SyncLog.log("warn", "NMOS", "MXL receivers of sender " + senderId + " left as they are: " + info.error, {receivers:receiverIds});
+            for(let receiverId of receiverIds){ mxlSettleClaim(this.mxlRepatched, receiverId, key, "skipped"); }
             return;
         }
+        let sentKey = mxlRepatchKey(senderId, info.mxl);
         for(let receiverId of receiverIds){
-            if(mxlReceiverReads(this.nmosState.receiverActiveData[receiverId], info.mxl)){ continue; }
+            // The stored /active can be stale: an operator may have switched
+            // the receiver off or routed it elsewhere since it was chosen.
+            let active = await this.readReceiverActiveNow(receiverId);
+            if(!mxlRepatchEligible(senderId, info.mxl, this.nmosState.receivers[receiverId], active, from,
+                this.nmosState.senders, this.nmosState.senderActiveData)){
+                mxlSettleClaim(this.mxlRepatched, receiverId, key, "skipped");
+                continue;
+            }
             try{
                 await this.makeConnection(receiverId, info);
+                mxlSettleClaim(this.mxlRepatched, receiverId, key, "patched", sentKey);
                 SyncLog.log("success", "NMOS", "Pointed MXL receiver " + receiverId + " at flow " + info.mxl.flowId + " of sender " + senderId);
             }catch(e:any){
+                mxlSettleClaim(this.mxlRepatched, receiverId, key, {error:e}, sentKey);
                 SyncLog.log("warn", "NMOS", "Could not point MXL receiver " + receiverId + " at the flow of sender " + senderId + ": " + (e?.message || e));
             }
+        }
+    }
+
+    /**
+     * Read a receiver's /active now and keep it, as getReceiverActive does.
+     * null when it cannot be read.
+     */
+    private async readReceiverActiveNow(receiverId:string):Promise<any>{
+        let seq = (this.receiverActiveSeq.get(receiverId) || 0) + 1;
+        this.receiverActiveSeq.set(receiverId, seq);
+        try{
+            let receiver:any = this.nmosState.receivers[receiverId];
+            let hrefs = selectControlHrefs(this.nmosState.devices[receiver.device_id].controls);
+            if(hrefs.length == 0){ return null; }
+            let response = await axios.get(joinHref(hrefs[0].href, "single/receivers/" + receiverId + "/active"), {timeout:10000});
+            if(this.receiverActiveSeq.get(receiverId) === seq && receiverActiveRead(this.nmosState.receivers[receiverId])){
+                if(receiverActiveChanged(this.nmosState.receiverActiveData[receiverId], response.data)){
+                    this.nmosState.receiverActiveData[receiverId] = response.data;
+                    this.updateCrosspoint();
+                }
+            }
+            return response.data;
+        }catch(e){
+            return null;
         }
     }
 
@@ -1278,7 +1320,7 @@ export class NmosRegistryConnector {
         let receiverId = g.path;
         let post = (g.hasOwnProperty("post") && typeof g.post == "object") ? g.post : null;
         if(!post || !receiverActiveRead(post)){
-            if(!post){ this.mxlRepatched.delete(receiverId); }
+            this.mxlRepatched.delete(receiverId);
             if(this.nmosState.receiverActiveData[receiverId]){
                 delete this.nmosState.receiverActiveData[receiverId];
                 this.updateCrosspoint();
@@ -1319,19 +1361,25 @@ export class NmosRegistryConnector {
                 let response = await axios.get(joinHref(href.href, "single/receivers/" + receiverId + "/active"), {timeout:10000});
                 if(this.receiverActiveSeq.get(receiverId) !== seq){ return; }
                 // Gone or connected by name in the meantime: drop, do not keep.
+                let changed = receiverActiveChanged(this.nmosState.receiverActiveData[receiverId], response.data);
                 if(!receiverActiveRead(this.nmosState.receivers[receiverId])){
+                    changed = !!this.nmosState.receiverActiveData[receiverId];
                     delete this.nmosState.receiverActiveData[receiverId];
                 }else{
                     this.nmosState.receiverActiveData[receiverId] = response.data;
                     // An MXL receiver taking a sender by name is kept on the
-                    // flow that sender writes, see repointMxlReceivers.
+                    // flow that sender writes, see repointMxlReceivers. Also
+                    // on an unchanged read: a claim released after a failed
+                    // attempt is tried again here.
                     let rx:any = this.nmosState.receivers[receiverId];
-                    let named = rx?.subscription?.sender_id || response.data?.sender_id;
+                    let named = mxlNamedSender(rx?.subscription, response.data);
                     if(named && transportFamily(rx?.transport) === "mxl"){
-                        this.repointMxlReceivers("" + named);
+                        this.repointMxlReceivers(named);
                     }
                 }
-                this.updateCrosspoint();
+                // The periodic reads mostly find nothing new; a rebuild each
+                // would cost a full crosspoint update per receiver.
+                if(changed){ this.updateCrosspoint(); }
                 return;
             }catch(e:any){
                 if(!tryNextControl(e)){
@@ -1863,7 +1911,9 @@ export class NmosRegistryConnector {
                     patch = buildMxlReceiverPatch(patch.sender_id ?? null, senderInfo.mxl, constraints);
                 }catch(e:any){
                     let id = SyncLog.log("warning", "NMOS Connect", e.message, {receiverId, sender:senderInfo.senderId});
-                    throw new LoggedError(e.message, id);
+                    // The receiver's constraints exclude the flow: a refusal,
+                    // see mxlFollow.mxlRefused.
+                    throw Object.assign(new LoggedError(e.message, id), {refused:true});
                 }
             }
         }else{
@@ -1950,10 +2000,10 @@ export class NmosRegistryConnector {
                         // TODO....
                         if(e.code == "ERR_BAD_REQUEST"){
                             let id = SyncLog.log("error", "nmos_connect", "Receiver "+receiverId+" returned Error: "+e.code,{controlHrefs,failedControl:patchHref,patch, status:e.response?.status, error:e.response?.data,});
-                            throw new LoggedError("Patch failed: "+e.response.data.error + " / " +e.response.data.debug , id);
+                            throw Object.assign(new LoggedError("Patch failed: "+e.response?.data?.error + " / " +e.response?.data?.debug , id), {status:e.response?.status});
                         }
                         let id = SyncLog.log("error", "nmos_connect", "Receiver "+receiverId+" returned Error: "+e.code,{controlHrefs,failedControl:patchHref,patch, status:e.response?.status, error:e.response?.data, message:e.message});
-                        throw new LoggedError("Receiver returned Error: "+e.code, id);
+                        throw Object.assign(new LoggedError("Receiver returned Error: "+e.code, id), {status:e.response?.status});
                     }
                 }else{
                     throw new LoggedError("Patch Failed: "+e.message);

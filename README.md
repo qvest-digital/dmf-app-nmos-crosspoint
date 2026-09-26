@@ -48,7 +48,7 @@ Tested with a wide range of devices — Lawo, Riedel, Embrionix, AJA, Imagine, S
 The Setup page is where everything is configured. Each section in short:
 
 **NMOS Registry, Acceptable PTP GMID, Receiver Auto-Reconnect**
-The top of the Setup page. The registry is found automatically (unicast DNS-SD → mDNS → static IP, where a static IP always wins); the live status below the form shows the detected DNS-SD domain and the connected registry with source, priority and subscription health. Changes apply live, no restart needed. Plus: which Grand-Master ID counts as "right" (devices locked to it get a green dot on the Details page, others a yellow one), and whether receivers should re-execute when a sender's SDP changes (off by default — many devices renegotiate on their own). MXL receivers follow their sender's flow whatever this says, since the flow they were pointed at is no longer written.
+The top of the Setup page. The registry is found automatically (unicast DNS-SD -> mDNS -> static IP, where a static IP always wins); the live status below the form shows the detected DNS-SD domain and the connected registry with source, priority and subscription health. Changes apply live, no restart needed. Plus: which Grand-Master ID counts as "right" (devices locked to it get a green dot on the Details page, others a yellow one), and whether receivers should re-execute when a sender's SDP changes (off by default -- many devices renegotiate on their own). MXL receivers follow their sender's flow whatever this says, since the flow they were pointed at is no longer written.
 
 ![Setup: registry discovery with DNS-SD domain and live status](Screenshots/setup-registry.png)
 

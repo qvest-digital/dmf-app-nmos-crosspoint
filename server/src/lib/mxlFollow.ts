@@ -11,7 +11,14 @@
  * now, whenever either /active is read (mxlReceiversOffFlow), so nothing has
  * to have been seen before. A receiver naming no sender is linked to one only
  * by the flow it reads, so it follows when a move is seen (mxlSenderStep,
- * mxlUnnamedReceiversOnFlow). mxlRepatchTargets combines the two.
+ * mxlUnnamedFollowers). mxlRepatchTargets combines the two. Either PATCH names
+ * the sender, so a receiver followed by its flow names the sender afterwards.
+ *
+ * Which sender a receiver takes is decided by its IS-05 /active when that
+ * names one, else by its IS-04 subscription (mxlNamedSender). A controller
+ * that patches only transport_params leaves sender_id naming the sender the
+ * receiver had before, so that sender's flow is taken as the one it should
+ * read and the receiver is pointed back at it.
  *
  * Not gated by reconnectReceiversOnSenderChange. That setting decides whether
  * an RTP receiver is activated again with a sender's changed SDP; left alone,
@@ -20,7 +27,8 @@
  * sender it already takes.
  */
 
-import { MxlEndpoint } from "./nmosConnectionPatch";
+import * as jsonpatch from "fast-json-patch";
+import { MxlEndpoint, resolvedMxlEndpoint } from "./nmosConnectionPatch";
 import { transportFamily, mxlReceiverReads } from "./transport";
 
 /** What was last seen of one MXL sender. */
@@ -77,6 +85,18 @@ export function mxlRepatchKey(senderId: string, endpoint: MxlEndpoint): string {
     return senderId + "|" + endpoint.domainId + "|" + endpoint.flowId;
 }
 
+/**
+ * The sender a receiver takes by name: the one its IS-05 /active names, else
+ * the one its IS-04 subscription names. "" when neither names one, null when
+ * both name one and they differ: then it is not known which it takes.
+ */
+export function mxlNamedSender(subscription: any, active: any): string | null {
+    const byActive = active && active.sender_id ? "" + active.sender_id : "";
+    const bySub = subscription && subscription.sender_id ? "" + subscription.sender_id : "";
+    if (byActive && bySub && byActive !== bySub) return null;
+    return byActive || bySub;
+}
+
 /** A running MXL receiver switched on in IS-05, or null. */
 function runningMxl(receiver: any, active: any): any {
     if (!receiver || transportFamily(receiver.transport) !== "mxl") return null;
@@ -107,8 +127,7 @@ export function mxlReceiversOffFlow(senderId: string, endpoint: MxlEndpoint, rec
         const active = receiverActiveData ? receiverActiveData[id] : null;
         const sub = runningMxl(receivers[id], active);
         if (!sub || !active) continue;
-        const named = sub.sender_id || active.sender_id || "";
-        if (named !== senderId) continue;
+        if (mxlNamedSender(sub, active) !== senderId) continue;
         if (mxlReceiverReads(active, endpoint)) continue;
         if (patched && patched.get(id) === key) continue;
         out.push(id);
@@ -126,10 +145,86 @@ export function mxlUnnamedReceiversOnFlow(from: MxlEndpoint, receivers: { [id: s
     for (const id of Object.keys(receivers || {})) {
         const active = receiverActiveData ? receiverActiveData[id] : null;
         const sub = runningMxl(receivers[id], active);
-        if (!sub || !active || sub.sender_id || active.sender_id) continue;
+        if (!sub || !active || mxlNamedSender(sub, active) !== "") continue;
         if (mxlReceiverReads(active, from)) out.push(id);
     }
     return out;
+}
+
+/** Whether an MXL sender other than `senderId` writes `endpoint` now. */
+export function mxlFlowWrittenByOther(endpoint: MxlEndpoint, senderId: string, senders: { [id: string]: any },
+    senderActiveData: { [id: string]: any }): boolean {
+    for (const id of Object.keys(senderActiveData || {})) {
+        if (id === senderId) continue;
+        const sender = senders ? senders[id] : null;
+        if (!sender || transportFamily(sender.transport) !== "mxl") continue;
+        const written = resolvedMxlEndpoint(senderActiveData[id]);
+        if (written && sameEndpoint(written, endpoint)) return true;
+    }
+    return false;
+}
+
+/**
+ * The receivers naming no sender that follow `senderId` off `from`, the flow
+ * it has just left: mxlUnnamedReceiversOnFlow, or none while another MXL
+ * sender still writes `from`, since a receiver reading it may be that one's.
+ */
+export function mxlUnnamedFollowers(senderId: string, from: MxlEndpoint, receivers: { [id: string]: any },
+    receiverActiveData: { [id: string]: any }, senders: { [id: string]: any }, senderActiveData: { [id: string]: any }): string[] {
+    if (mxlFlowWrittenByOther(from, senderId, senders, senderActiveData)) return [];
+    return mxlUnnamedReceiversOnFlow(from, receivers, receiverActiveData);
+}
+
+/**
+ * Whether a receiver chosen by mxlRepatchTargets is still to be pointed at
+ * `endpoint`, checked again just before its PATCH: an operator may have
+ * switched it off or routed it elsewhere since. It has to be a running MXL
+ * receiver with a known /active that has it switched on and reads another
+ * flow, and either take `senderId` by name, or name no sender and read
+ * `from`, the flow the sender left, with no other sender writing that.
+ */
+export function mxlRepatchEligible(senderId: string, endpoint: MxlEndpoint, receiver: any, active: any,
+    from: MxlEndpoint | null, senders: { [id: string]: any }, senderActiveData: { [id: string]: any }): boolean {
+    const sub = runningMxl(receiver, active);
+    if (!sub || !active) return false;
+    if (mxlReceiverReads(active, endpoint)) return false;
+    const named = mxlNamedSender(sub, active);
+    if (named === senderId) return true;
+    if (named !== "" || !from) return false;
+    return mxlReceiverReads(active, from) && !mxlFlowWrittenByOther(from, senderId, senders, senderActiveData);
+}
+
+/**
+ * Whether a failed re-patch was the receiver refusing the flow: a 4xx
+ * answer (`status`), or a domain its constraints exclude (`refused`, no
+ * PATCH sent). Asking again gets the same answer until the sender moves.
+ */
+export function mxlRefused(error: any): boolean {
+    if (!error) return false;
+    if (error.refused === true) return true;
+    return typeof error.status === "number" && error.status >= 400 && error.status < 500;
+}
+
+/**
+ * Settle the claim mxlRepatchTargets put on receiver `id` under `key` once
+ * its re-patch is over. Kept when the PATCH was taken or refused, as
+ * `sentKey` when the flow re-read before patching differed from the claimed
+ * one. Released when nothing was sent (the sender could not be read or was
+ * off, the receiver no longer qualified) or the attempt failed otherwise, so
+ * a later read tries again. A claim made meanwhile is left alone.
+ */
+export function mxlSettleClaim(patched: Map<string, string>, id: string, key: string,
+    outcome: "patched" | "skipped" | { error: any }, sentKey: string = key) {
+    if (patched.get(id) !== key) return;
+    const kept = outcome === "patched" || (typeof outcome === "object" && mxlRefused(outcome.error));
+    if (kept) patched.set(id, sentKey);
+    else patched.delete(id);
+}
+
+/** Whether a receiver's /active read now says anything else than before. */
+export function receiverActiveChanged(before: any, after: any): boolean {
+    if (!before || !after || typeof before !== "object" || typeof after !== "object") return before !== after;
+    return jsonpatch.compare(before, after).length > 0;
 }
 
 /**
@@ -142,13 +237,19 @@ export function mxlUnnamedReceiversOnFlow(from: MxlEndpoint, receivers: { [id: s
  * while the sender stays on it. A receiver patched for this sender and seen
  * reading the flow it writes now has its claim dropped: it is where it
  * belongs, and if the sender moves again it is asked again, also to a flow it
- * refused before.
+ * refused before. The claim of a receiver that is gone or no longer a running
+ * MXL receiver is dropped too.
  *
  * @param patched mxlRepatchKey of the last re-patch per receiver id, updated
  */
 export function mxlRepatchTargets(senderId: string, endpoint: MxlEndpoint, receivers: { [id: string]: any },
     receiverActiveData: { [id: string]: any }, patched: Map<string, string>, unnamed: string[] = []): string[] {
     for (const [id, claim] of Array.from(patched)) {
+        const receiver = receivers ? receivers[id] : null;
+        if (!receiver || transportFamily(receiver.transport) !== "mxl" || !receiver.subscription?.active) {
+            patched.delete(id);
+            continue;
+        }
         if (!claim.startsWith(senderId + "|")) continue;
         if (mxlReceiverReads(receiverActiveData ? receiverActiveData[id] : null, endpoint)) patched.delete(id);
     }
