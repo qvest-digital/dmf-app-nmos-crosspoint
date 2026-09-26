@@ -1431,7 +1431,10 @@ export class NmosRegistryConnector {
                 try{
                     let sender = this.nmosState.senders[senderId];
                     if(!sender) continue;
-                    if(!usesMulticastLease(sender)) continue;
+                    if(!usesMulticastLease(sender)){
+                        if(manager.getLease(senderId)){ manager.releaseLeases([senderId]); }
+                        continue;
+                    }
                     let isActive = !!(sender.subscription && sender.subscription.active);
                     if(!isActive) continue;
                     if(manager.getLease(senderId)) continue;  // already has a lease
