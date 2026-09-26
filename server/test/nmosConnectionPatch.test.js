@@ -78,3 +78,23 @@ test("a control that cannot be reached is skipped, a device's answer is not", ()
     assert.equal(p.tryNextControl({ code: "ERR_BAD_RESPONSE", response: { status: 500 } }), false);
     assert.equal(p.tryNextControl({ response: { status: 404 } }), false);
 });
+
+test("switching a non-RTP sender on or off sends no RTP parameters", () => {
+    // rtp_enabled is outside an MXL sender's constraints; the device answers 400.
+    const patch = p.buildSenderEnablePatch(p.TRANSPORT_MXL, 1, false);
+    assert.equal(patch.master_enable, true);
+    assert.equal(patch.transport_params, undefined);
+    assert.equal(p.buildSenderEnablePatch(p.TRANSPORT_MXL, 2, true).master_enable, false);
+    for (const t of ["urn:x-nmos:transport:websocket", "urn:x-nmos:transport:mqtt", "urn:x-example:unknown"]) {
+        assert.equal(p.buildSenderEnablePatch(t, 1, false).transport_params, undefined, t);
+    }
+});
+
+test("switching an RTP sender sets rtp_enabled on every leg", () => {
+    assert.deepEqual(p.buildSenderEnablePatch("urn:x-nmos:transport:rtp.mcast", 2, false).transport_params,
+        [{ rtp_enabled: true }, { rtp_enabled: true }]);
+    assert.deepEqual(p.buildSenderEnablePatch("urn:x-nmos:transport:rtp", 0, true).transport_params,
+        [{ rtp_enabled: false }]);
+    assert.deepEqual(p.buildSenderEnablePatch("urn:x-nmos:transport:rtp.ucast", 1, false).transport_params,
+        [{ rtp_enabled: true }]);
+});

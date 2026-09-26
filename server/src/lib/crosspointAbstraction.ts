@@ -783,15 +783,15 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                             try{
                                 freshInfo = await NmosRegistryConnector.instance.connectionGetSenderInfo(nmosId);
                             }catch(e){ freshInfo = null; }
-                            if(freshInfo && freshInfo.manifestFile && /\r?\nm=/.test(freshInfo.manifestFile)){
+                            if(senderReady(freshInfo)){
                                 break;
                             }
                         }
-                        if(freshInfo && freshInfo.manifestFile && /\r?\nm=/.test(freshInfo.manifestFile)){
+                        if(senderReady(freshInfo)){
                             senderInfo = freshInfo;
                         }else{
                             SyncLog.log("warning", "connect_crosspoint",
-                                "Auto-activated sender " + src.id + " but its SDP still has no media section after 4s — patching with what we have.");
+                                "Auto-activated sender " + src.id + (freshInfo && freshInfo.transport == "mxl" ? " but its MXL flow is still unresolved" : " but its SDP still has no media section") + " after 4s -- patching with what we have.");
                             if(freshInfo){ senderInfo = freshInfo; }
                         }
                         // mark the locally-cached senderInfo as active so downstream
@@ -1896,6 +1896,15 @@ export interface CrosspointShadowFlow {
     type:"video" | "audio" | "data" | "mqtt" | "websocket" | "audiochannel" | "unknown",
     channelNumber: number,
 };
+
+// Whether an auto-activated sender can be connected to: an MXL sender once its
+// /active names the flow and domain (it has no SDP), any other once its SDP has
+// a media section.
+function senderReady(info: CrosspointConnectionSenderInfo | null): boolean {
+    if(!info){ return false; }
+    if(info.transport == "mxl"){ return !!info.mxl; }
+    return !!info.manifestFile && /\r?\nm=/.test(info.manifestFile);
+}
 
 export interface CrosspointConnectionSenderInfo {
     senderId:string,
