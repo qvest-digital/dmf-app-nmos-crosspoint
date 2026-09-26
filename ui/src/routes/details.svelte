@@ -84,6 +84,9 @@
       // returns 405 for virtual senders (their address comes from the
       // pasted SDP, not from IS-05).
       isVirtual:boolean;
+      // Transport family ("rtp", "mxl", ...), "" when unknown. Only an RTP
+      // sender has a destination address, so only it gets the edit pencil.
+      transport:string;
     }
     interface ReceiverRow {
       id:string;
@@ -261,7 +264,8 @@
             bitrate: s.bitrate,
             legs,
             sdp: (typeof s.sdp === "string") ? s.sdp : "",
-            isVirtual: !!s.isVirtual
+            isVirtual: !!s.isVirtual,
+            transport: s.capabilities?.transport || ""
           };
 
           if(searchTokens.length > 0){
@@ -1216,7 +1220,7 @@
                                 </span>
                               {/if}
                             {:else}
-                              {#if !flow.isVirtual}
+                              {#if !flow.isVirtual && (!flow.transport || flow.transport === "rtp")}
                                 <button class="det-icon-btn det-hover" on:click={()=>startLegEdit(flow, leg.index)}
                                         use:OverlayMenuService.tooltip data-tooltip={flow.legs.length > 1 ? "Edit Multicast / Port (both legs, one PATCH)" : "Edit Multicast / Port"}>
                                   <Icon src={Pencil}></Icon>

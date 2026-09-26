@@ -121,6 +121,23 @@ export function buildSenderEnablePatch(transport: string, legCount: number, disa
     return patch;
 }
 
+/**
+ * Whether the multicast lease manager may give a sender a group. Only an RTP
+ * multicast sender takes one: an MXL, WebSocket or MQTT sender has no
+ * destination_ip and answers a PATCH carrying one with 400, and its /active
+ * never shows a leased group, so every refresh would try again. A unicast RTP
+ * sender's destination is its receiver, not a group from the pool.
+ */
+export function usesMulticastLease(sender: any): boolean {
+    const kind = transportKind(sender?.transport);
+    return kind === "rtp.mcast" || sender?.transport === "urn:x-nmos:transport:rtp";
+}
+
+/** Whether a sender has destination_ip and destination_port to PATCH at all. */
+export function hasRtpDestination(sender: any): boolean {
+    return transportKind(sender?.transport).startsWith("rtp");
+}
+
 export interface SdpLeg {
     multicast_ip: string,
     destination_port: number,
