@@ -327,10 +327,11 @@ class CrosspointUpdateThread{
         }
 
         if(change.action == "movedevice"){
-            if(moveDeviceNum(this.crosspointShadow.devices, change.devId, change.newNum)){
+            if(moveDeviceNum(this.crosspointShadow.devices, change.devId, change.newNum, ()=>this.nextDeviceNum++)){
                 changed = true;
-                // A number set by hand in the dynamic range must not be
-                // handed out again to the next device that appears.
+                // A number set by hand at or above the next dynamic number
+                // must not be handed out again to the next device that
+                // appears. Same rule as the scan at startup.
                 let num = this.crosspointShadow.devices[change.devId].num;
                 if(num >= this.nextDeviceNum){
                     this.nextDeviceNum = num + 1;

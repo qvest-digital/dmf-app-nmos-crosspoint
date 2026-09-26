@@ -137,8 +137,7 @@ $det-color-data:  theme('colors.blue.500');
         white-space: nowrap;
     }
 
-    // Crosspoint number. Theme colours only, so it reads in both designs;
-    // the spinner arrows are hidden, the field is too narrow for them.
+    // Crosspoint number. Theme colours only, so it reads in both designs.
     .det-num-input {
         width: 4.5em;
         flex: 0 0 auto;
@@ -150,14 +149,7 @@ $det-color-data:  theme('colors.blue.500');
         border-radius: 3px;
         padding: 0 5px;
         color: inherit;
-        -moz-appearance: textfield;
-        appearance: textfield;
 
-        &::-webkit-outer-spin-button,
-        &::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-        }
         &:focus {
             outline: none;
             border-color: theme('colors.info');

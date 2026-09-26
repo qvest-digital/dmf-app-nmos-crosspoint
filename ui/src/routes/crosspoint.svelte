@@ -1319,7 +1319,7 @@
 
       let srcFlows:any[] = [];
       for(let dev of devices){
-        if(dev.num == s.deviceNum){
+        if(dev.num > 0 && dev.num == s.deviceNum){
           for(let type in dev.senders){
             if(type == s.flowType || s.deviceOnly){
               for(let flow of dev.senders[type]){
@@ -1332,7 +1332,7 @@
 
       let dstFlows:any[] = [];
       for(let dev of devices){
-        if(dev.num == d.deviceNum){
+        if(dev.num > 0 && dev.num == d.deviceNum){
           for(let type in dev.receivers){
             if(type == d.flowType || d.deviceOnly){
               for(let flow of dev.receivers[type]){

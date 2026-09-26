@@ -546,8 +546,10 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                     sourceDeviceOnly = true;
                 }
 
+                // -1 is "no number", shared by every unnumbered device, so
+                // it never selects one.
                 for(let dev of this.crosspointState.devices){
-                    if(dev.num == sourceDevice){
+                    if(dev.num > 0 && dev.num == sourceDevice){
                         srcDev = dev;
                         for(let type in dev.senders){
                             if(type == sourceFlowType || sourceDeviceOnly){
@@ -590,7 +592,7 @@ const md5 = data => crypto.createHash('md5').update(data).digest("hex")
                 }
 
                 for(let dev of this.crosspointState.devices){
-                    if(dev.num == destinationDevice){
+                    if(dev.num > 0 && dev.num == destinationDevice){
 
                         dstDev = dev;
                         for(let type in dev.receivers){
