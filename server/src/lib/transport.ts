@@ -5,6 +5,8 @@
  * Free of state and I/O so the rules can be tested on registry JSON alone.
  */
 
+import { MxlEndpoint, resolvedMxlEndpoint } from "./nmosConnectionPatch";
+
 export type TransportFamily = "rtp" | "mxl" | "websocket" | "mqtt" | "";
 
 /** The family of an IS-04 transport, from its URN or from the short name the
@@ -138,28 +140,58 @@ export function matchSenderByAddress(receiverActive: any, senderActiveData: { [i
     return tie ? "" : best;
 }
 
+/** Whether an MXL receiver's /active points at this flow. A side naming no
+ *  domain does not rule the other out. */
+export function mxlReceiverReads(receiverActive: any, endpoint: MxlEndpoint): boolean {
+    const leg = receiverActive?.transport_params?.[0];
+    if (!leg || leg.mxl_flow_id !== endpoint.flowId) return false;
+    const domain = leg.mxl_domain_id;
+    return typeof domain !== "string" || domain === "" || domain === "auto" || domain === endpoint.domainId;
+}
+
+/**
+ * The sender an MXL receiver takes, found by the flow it reads: the one MXL
+ * sender whose /active writes that flow. "" when none does or two do.
+ */
+export function matchSenderByMxlFlow(receiverActive: any, senderActiveData: { [id: string]: any }, senders: { [id: string]: any }): string {
+    let found = "";
+    for (const id of Object.keys(senderActiveData || {})) {
+        const sender = senders ? senders[id] : null;
+        if (!sender || transportFamily(sender.transport) !== "mxl") continue;
+        const endpoint = resolvedMxlEndpoint(senderActiveData[id]);
+        if (!endpoint || !mxlReceiverReads(receiverActive, endpoint)) continue;
+        if (found) return "";
+        found = id;
+    }
+    return found;
+}
+
 /**
  * The sender a receiver is connected to, "" when none.
  *
  * Only a running receiver (IS-04 `subscription.active`) has one. It is the
  * sender the IS-04 subscription names, else the one its IS-05 /active names,
- * else -- RTP only -- the one sending to the addresses it joins
- * (matchSenderByAddress).
+ * else the one sending to the addresses an RTP receiver joins
+ * (matchSenderByAddress) or writing the flow an MXL receiver reads
+ * (matchSenderByMxlFlow).
  */
 export function connectedSenderId(receiver: any, receiverActive: any, senderActiveData: { [id: string]: any }, senders: { [id: string]: any }): string {
     const sub = receiver?.subscription;
     if (!sub || !sub.active) return "";
     if (sub.sender_id) return "" + sub.sender_id;
     if (receiverActive?.sender_id) return "" + receiverActive.sender_id;
-    if (transportFamily(receiver?.transport) !== "rtp") return "";
+    const family = transportFamily(receiver?.transport);
+    if (family !== "rtp" && family !== "mxl") return "";
     // IS-05 says it is switched off: nothing is joined, whatever IS-04 says.
     if (receiverActive && receiverActive.master_enable === false) return "";
+    if (family === "mxl") return matchSenderByMxlFlow(receiverActive, senderActiveData, senders);
     return matchSenderByAddress(receiverActive, senderActiveData, senders);
 }
 
-/** A receiver whose sender only its IS-05 /active can tell: running, RTP,
- *  and not naming the sender in IS-04. */
+/** A receiver whose sender only its IS-05 /active can tell: running, RTP or
+ *  MXL, and not naming the sender in IS-04. */
 export function receiverNeedsActive(receiver: any): boolean {
     const sub = receiver?.subscription;
-    return !!(sub && sub.active && !sub.sender_id && transportFamily(receiver?.transport) === "rtp");
+    const family = transportFamily(receiver?.transport);
+    return !!(sub && sub.active && !sub.sender_id && (family === "rtp" || family === "mxl"));
 }
