@@ -156,7 +156,7 @@ Register `https://<crosspoint>/auth/oidc/callback` as redirect URI with the prov
 | --- | --- | --- |
 | `issuer`, `clientId` | | Both set: single sign-on is on. |
 | `clientSecret` | none | For a confidential client; without it the client is public. |
-| `redirectUri` | from the request | Set it when a proxy hides the host the browser used. |
+| `redirectUri` | from the request | Set it when a proxy hides the scheme or the host the browser used: the redirect URI the provider is sent, and whether the session cookie is `Secure`, follow from it. |
 | `scopes` | `openid profile email` | |
 | `groupsClaim` | `groups` | ID token claim with the user's groups or roles; a dotted path reads a nested one, e.g. `realm_access.roles`. |
 | `groupMap` | none | Claim value -> crosspoint groups. |
