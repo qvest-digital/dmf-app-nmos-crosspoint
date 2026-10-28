@@ -32,6 +32,10 @@ export function flowGrainRate(flow: any, source: any): { numerator: number, deno
     return null;
 }
 
+/** The format values the format string and bitrate switches read as video:
+ *  the IS-04 URN and the legacy spellings some Nodes still publish. */
+const VIDEO_FORMATS = ["urn:x-nmos:format:video", "video", "video/raw"];
+
 /**
  * The Flow's interlace_mode, "progressive" where a video Flow omits it: IS-04
  * flow_video gives the attribute that default. Undefined for a Flow that is
@@ -40,7 +44,7 @@ export function flowGrainRate(flow: any, source: any): { numerator: number, deno
 export function flowInterlaceMode(flow: any): string | undefined {
     if (!flow) return undefined;
     if (typeof flow.interlace_mode === "string" && flow.interlace_mode !== "") return flow.interlace_mode;
-    const video = flow.format === "urn:x-nmos:format:video" ||
+    const video = VIDEO_FORMATS.includes(flow.format) ||
         (flow.format === undefined && typeof flow.frame_width === "number");
     return video ? "progressive" : undefined;
 }
