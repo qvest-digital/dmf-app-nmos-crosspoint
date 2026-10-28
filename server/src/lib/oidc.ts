@@ -158,6 +158,16 @@ export class OidcSignIn {
         return this.origin(req).startsWith("https:");
     }
 
+    /** Clears of the unprefixed cookies a request still carries over https,
+     *  set there by a crosspoint from before the __Host- prefix and no
+     *  longer read. Secure, or the browser would not let them overwrite. */
+    private legacyClears(req: any): string[] {
+        if (!this.secure(req)) return [];
+        const had = parseCookies(req?.headers?.cookie);
+        return [STATE_COOKIE, SESSION_COOKIE].filter((n) => n in had)
+            .map((n) => n + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure");
+    }
+
     private readCookie(req: any, name: string): string {
         return parseCookies(req?.headers?.cookie)[cookieName(name, this.secure(req))] || "";
     }
@@ -237,7 +247,7 @@ export class OidcSignIn {
         url.searchParams.set("nonce", nonce);
         url.searchParams.set("code_challenge", crypto.createHash("sha256").update(verifier).digest("base64url"));
         url.searchParams.set("code_challenge_method", "S256");
-        res.setHeader("Set-Cookie", cookie(STATE_COOKIE, pending, LOGIN_TIMEOUT / 1000, this.secure(req)));
+        res.setHeader("Set-Cookie", [cookie(STATE_COOKIE, pending, LOGIN_TIMEOUT / 1000, this.secure(req)), ...this.legacyClears(req)]);
         res.redirect(url.toString());
     }
 
@@ -355,7 +365,7 @@ export class OidcSignIn {
         this.sessions.delete(id);
         if (s) this.onLogout(id);
         const origin = this.origin(req);
-        res.setHeader("Set-Cookie", cookie(SESSION_COOKIE, "", 0, this.secure(req)));
+        res.setHeader("Set-Cookie", [cookie(SESSION_COOKIE, "", 0, this.secure(req)), ...this.legacyClears(req)]);
         const end = this.meta?.end_session_endpoint;
         if (!s || !end) {
             res.redirect("/");
