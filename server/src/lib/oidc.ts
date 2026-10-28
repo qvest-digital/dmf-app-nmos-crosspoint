@@ -16,7 +16,6 @@ const LOGOUT_PATH = "/auth/oidc/logout";
 export const SESSION_COOKIE = "nmoscrosspoint_session";
 const STATE_COOKIE = "nmoscrosspoint_oidc_state";
 const LOGIN_TIMEOUT = 10 * 60 * 1000;
-const MAX_PENDING = 1000;
 const HTTP_TIMEOUT = 10000;
 
 export type OidcConfig = {
@@ -121,13 +120,17 @@ function cookie(name: string, value: string, maxAgeSeconds: number, secure: bool
 
 const random = () => crypto.randomBytes(32).toString("base64url");
 
-type Pending = { verifier: string, nonce: string, redirectUri: string, returnTo: string, expires: number };
+type Pending = { state: string, verifier: string, nonce: string, redirectUri: string, returnTo: string, expires: number };
 type Session = { user: string, groups: string[], idToken: string, expires: number };
 
 export class OidcSignIn {
     private meta: any = null;
     private jwks: any = null;
-    private pending = new Map<string, Pending>();
+    // Signs the state cookie, which carries a sign-in in progress: nothing is
+    // held here until the callback, so there is no capacity to fill. Per
+    // process, so a restart ends the sign-ins in progress, as it ends the
+    // sessions.
+    private readonly stateKey = crypto.randomBytes(32);
     private sessions = new Map<string, Session>();
 
     /** Called with the id of every session that ends by logout. */
@@ -138,6 +141,16 @@ export class OidcSignIn {
     /** scheme://host users reach the crosspoint at. */
     origin(req: any): string {
         return this.config.redirectUri ? new URL(this.config.redirectUri).origin : requestOrigin(req);
+    }
+
+    /** Whether a request comes from the crosspoint's own pages, or from no
+     *  page at all, as far as the browser says. */
+    sameOriginRequest(req: any): boolean {
+        const site = str(req.headers?.["sec-fetch-site"]);
+        if (site) return site === "same-origin" || site === "none";
+        const from = str(req.headers?.origin) || str(req.headers?.referer);
+        if (!from) return true;
+        try { return new URL(from).origin === this.origin(req); } catch (e) { return false; }
     }
 
     /** The signed-in user behind a WebSocket upgrade, if any. The cookie
@@ -159,7 +172,6 @@ export class OidcSignIn {
     prune() {
         const now = Date.now();
         for (const [k, s] of this.sessions) if (s.expires <= now) this.sessions.delete(k);
-        for (const [k, p] of this.pending) if (p.expires <= now) this.pending.delete(k);
     }
 
     mount(app: any) {
@@ -190,16 +202,10 @@ export class OidcSignIn {
     private async login(req: any, res: any) {
         const meta = await this.discover();
         this.prune();
-        // Refused rather than making room: evicting the oldest would let
-        // anyone sending requests here end every sign-in in progress.
-        if (this.pending.size >= MAX_PENDING) {
-            res.status(503).type("text/plain").send("Too many sign-ins in progress. Try again in a few minutes.");
-            return;
-        }
         const state = random(), nonce = random(), verifier = random();
         const redirectUri = this.config.redirectUri || this.origin(req) + CALLBACK_PATH;
-        this.pending.set(state, {
-            verifier, nonce, redirectUri,
+        const pending = this.sealState({
+            state, verifier, nonce, redirectUri,
             returnTo: safeReturnPath(req.query?.return),
             expires: Date.now() + LOGIN_TIMEOUT,
         });
@@ -212,20 +218,25 @@ export class OidcSignIn {
         url.searchParams.set("nonce", nonce);
         url.searchParams.set("code_challenge", crypto.createHash("sha256").update(verifier).digest("base64url"));
         url.searchParams.set("code_challenge_method", "S256");
-        res.setHeader("Set-Cookie", cookie(STATE_COOKIE, state, LOGIN_TIMEOUT / 1000, redirectUri.startsWith("https:")));
+        res.setHeader("Set-Cookie", cookie(STATE_COOKIE, pending, LOGIN_TIMEOUT / 1000, redirectUri.startsWith("https:")));
         res.redirect(url.toString());
     }
 
     private async callback(req: any, res: any) {
         const state = str(req.query?.state);
-        const p = this.pending.get(state);
-        this.pending.delete(state);
         // The state cookie ties the answer to the browser that started the
-        // sign-in, so nobody can sign a victim in with their own account.
-        if (!p || p.expires <= Date.now() || parseCookies(req.headers.cookie)[STATE_COOKIE] !== state) {
+        // sign-in, so nobody can sign a victim in with their own account. It
+        // is cleared whatever the outcome; the code it was for is single-use
+        // at the provider.
+        const p = this.openState(parseCookies(req.headers.cookie)[STATE_COOKIE]);
+        if (!p || !state || p.state !== state || p.expires <= Date.now()) {
+            res.setHeader("Set-Cookie", cookie(STATE_COOKIE, "", 0, p ? p.redirectUri.startsWith("https:") : false));
             res.status(400).type("text/plain").send("Sign-in expired or was started in another browser. Try again.");
             return;
         }
+        // Cleared now, so a failed exchange below clears it too; the answers
+        // that follow set it again together with what else they set.
+        res.setHeader("Set-Cookie", cookie(STATE_COOKIE, "", 0, p.redirectUri.startsWith("https:")));
         if (req.query?.error) {
             res.status(403).type("text/plain").send("The provider refused the sign-in: " +
                 (str(req.query.error_description) || str(req.query.error)));
@@ -266,6 +277,29 @@ export class OidcSignIn {
         res.redirect(p.returnTo);
     }
 
+    /** A sign-in in progress as a cookie value: its JSON, then an HMAC of it. */
+    private sealState(p: Pending): string {
+        const body = Buffer.from(JSON.stringify(p)).toString("base64url");
+        return body + "." + crypto.createHmac("sha256", this.stateKey).update(body).digest("base64url");
+    }
+
+    /** The sign-in a state cookie carries, null unless this process signed it. */
+    private openState(value: any): Pending | null {
+        const [body, mac, extra] = str(value).split(".");
+        if (!body || !mac || extra !== undefined) return null;
+        const want = crypto.createHmac("sha256", this.stateKey).update(body).digest();
+        const got = Buffer.from(mac, "base64url");
+        if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return null;
+        try {
+            const p = JSON.parse(Buffer.from(body, "base64url").toString());
+            const ok = ["state", "verifier", "nonce", "redirectUri", "returnTo"].every((k) => typeof p?.[k] === "string") &&
+                typeof p.expires === "number";
+            return ok ? p : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
     private async redeem(meta: any, code: string, p: Pending): Promise<string> {
         const body = new URLSearchParams({
             grant_type: "authorization_code",
@@ -291,9 +325,9 @@ export class OidcSignIn {
 
     private async logout(req: any, res: any) {
         // A page of another site could otherwise sign a user out by linking
-        // here. A browser that sends no Sec-Fetch-Site is let through.
-        const site = str(req.headers?.["sec-fetch-site"]);
-        if (site && site !== "same-origin" && site !== "none") {
+        // here. Without Sec-Fetch-Site an Origin or Referer of another origin
+        // is refused; a request with neither, a typed URL, is let through.
+        if (!this.sameOriginRequest(req)) {
             res.status(403).type("text/plain").send("Sign out from the crosspoint's own page.");
             return;
         }
