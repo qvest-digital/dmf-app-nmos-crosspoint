@@ -153,4 +153,7 @@ test("a stated interlace_mode is kept, and only video has one", () => {
     assert.equal(rc.flowInterlaceMode({ format: "urn:x-nmos:format:data", media_type: "video/smpte291" }), undefined);
     assert.equal(C + "interlace_mode" in rc.flowCapAttrs({ media_type: "audio/L24" }, null), false);
     assert.equal(rc.flowInterlaceMode(null), undefined);
+    // The legacy format spellings the format string and bitrate read as video.
+    assert.equal(rc.flowInterlaceMode({ format: "video", frame_width: 1920 }), "progressive");
+    assert.equal(rc.flowInterlaceMode({ format: "video/raw", frame_width: 1920 }), "progressive");
 });
