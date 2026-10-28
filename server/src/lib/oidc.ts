@@ -89,10 +89,12 @@ function userName(claims: any): string {
     return str(claims?.preferred_username) || str(claims?.email) || str(claims?.sub);
 }
 
-/** A local path to return to after sign-in; anything else is "/". */
+/** A local path to return to after sign-in; anything else is "/". Capped at
+ *  1 KiB, because it travels in the state cookie and a browser drops a
+ *  cookie past 4 KiB. */
 export function safeReturnPath(p: any): string {
     const s = str(p);
-    return s.startsWith("/") && !s.startsWith("//") && !s.startsWith("/\\") ? s : "/";
+    return s.length <= 1024 && s.startsWith("/") && !s.startsWith("//") && !s.startsWith("/\\") ? s : "/";
 }
 
 function parseCookies(header: any): { [name: string]: string } {
@@ -113,9 +115,16 @@ export function requestOrigin(req: any): string {
     return proto + "://" + host;
 }
 
+/** The name a cookie is set and read under. Over https it takes the
+ *  __Host- prefix, so the browser holds only one this host set itself, with
+ *  Secure and Path=/: a sibling host on the same site cannot plant one. */
+function cookieName(name: string, secure: boolean): string {
+    return (secure ? "__Host-" : "") + name;
+}
+
 function cookie(name: string, value: string, maxAgeSeconds: number, secure: boolean): string {
-    return name + "=" + encodeURIComponent(value) + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + maxAgeSeconds +
-        (secure ? "; Secure" : "");
+    return cookieName(name, secure) + "=" + encodeURIComponent(value) + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" +
+        maxAgeSeconds + (secure ? "; Secure" : "");
 }
 
 const random = () => crypto.randomBytes(32).toString("base64url");
@@ -143,6 +152,26 @@ export class OidcSignIn {
         return this.config.redirectUri ? new URL(this.config.redirectUri).origin : requestOrigin(req);
     }
 
+    /** Whether the crosspoint is reached over https, which decides the
+     *  cookies' Secure flag and name. */
+    private secure(req: any): boolean {
+        return this.origin(req).startsWith("https:");
+    }
+
+    /** Clears of the unprefixed cookies a request still carries over https,
+     *  set there by a crosspoint from before the __Host- prefix and no
+     *  longer read. Secure, or the browser would not let them overwrite. */
+    private legacyClears(req: any): string[] {
+        if (!this.secure(req)) return [];
+        const had = parseCookies(req?.headers?.cookie);
+        return [STATE_COOKIE, SESSION_COOKIE].filter((n) => n in had)
+            .map((n) => n + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure");
+    }
+
+    private readCookie(req: any, name: string): string {
+        return parseCookies(req?.headers?.cookie)[cookieName(name, this.secure(req))] || "";
+    }
+
     /** Whether a request comes from the crosspoint's own pages, or from no
      *  page at all, as far as the browser says. */
     sameOriginRequest(req: any): boolean {
@@ -158,7 +187,7 @@ export class OidcSignIn {
      *  on the same site, so the page has to be the crosspoint's own. */
     identify(req: any): Identity | null {
         if (str(req?.headers?.origin) !== this.origin(req)) return null;
-        const id = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+        const id = this.readCookie(req, SESSION_COOKIE);
         if (!id || !this.isActive(id)) return null;
         const s = this.sessions.get(id)!;
         return { user: s.user, groups: s.groups, sessionId: id };
@@ -218,7 +247,7 @@ export class OidcSignIn {
         url.searchParams.set("nonce", nonce);
         url.searchParams.set("code_challenge", crypto.createHash("sha256").update(verifier).digest("base64url"));
         url.searchParams.set("code_challenge_method", "S256");
-        res.setHeader("Set-Cookie", cookie(STATE_COOKIE, pending, LOGIN_TIMEOUT / 1000, redirectUri.startsWith("https:")));
+        res.setHeader("Set-Cookie", [cookie(STATE_COOKIE, pending, LOGIN_TIMEOUT / 1000, this.secure(req)), ...this.legacyClears(req)]);
         res.redirect(url.toString());
     }
 
@@ -228,15 +257,16 @@ export class OidcSignIn {
         // sign-in, so nobody can sign a victim in with their own account. It
         // is cleared whatever the outcome; the code it was for is single-use
         // at the provider.
-        const p = this.openState(parseCookies(req.headers.cookie)[STATE_COOKIE]);
+        const secure = this.secure(req);
+        const p = this.openState(this.readCookie(req, STATE_COOKIE));
         if (!p || !state || p.state !== state || p.expires <= Date.now()) {
-            res.setHeader("Set-Cookie", cookie(STATE_COOKIE, "", 0, p ? p.redirectUri.startsWith("https:") : false));
+            res.setHeader("Set-Cookie", cookie(STATE_COOKIE, "", 0, secure));
             res.status(400).type("text/plain").send("Sign-in expired or was started in another browser. Try again.");
             return;
         }
         // Cleared now, so a failed exchange below clears it too; the answers
         // that follow set it again together with what else they set.
-        res.setHeader("Set-Cookie", cookie(STATE_COOKIE, "", 0, p.redirectUri.startsWith("https:")));
+        res.setHeader("Set-Cookie", cookie(STATE_COOKIE, "", 0, secure));
         if (req.query?.error) {
             res.status(403).type("text/plain").send("The provider refused the sign-in: " +
                 (str(req.query.error_description) || str(req.query.error)));
@@ -258,7 +288,6 @@ export class OidcSignIn {
         }
         const user = userName(payload);
         const groups = groupsFor(payload, this.config);
-        const secure = p.redirectUri.startsWith("https:");
         if (!user || groups.length === 0) {
             SyncLog.log("warn", "OIDC", "Sign-in refused for " + (user || "an account without a name") + ": no group mapped");
             res.setHeader("Set-Cookie", cookie(STATE_COOKIE, "", 0, secure));
@@ -266,7 +295,7 @@ export class OidcSignIn {
                 ", but no crosspoint group is mapped to this account.");
             return;
         }
-        this.sessions.delete(parseCookies(req.headers.cookie)[SESSION_COOKIE] || "");
+        this.sessions.delete(this.readCookie(req, SESSION_COOKIE));
         const id = random();
         this.sessions.set(id, { user, groups, idToken, expires: Date.now() + this.config.sessionHours * 3600 * 1000 });
         SyncLog.log("info", "OIDC", "Signed in " + user + " (" + groups.join(", ") + ")");
@@ -331,12 +360,12 @@ export class OidcSignIn {
             res.status(403).type("text/plain").send("Sign out from the crosspoint's own page.");
             return;
         }
-        const id = parseCookies(req.headers.cookie)[SESSION_COOKIE] || "";
+        const id = this.readCookie(req, SESSION_COOKIE);
         const s = this.sessions.get(id);
         this.sessions.delete(id);
         if (s) this.onLogout(id);
         const origin = this.origin(req);
-        res.setHeader("Set-Cookie", cookie(SESSION_COOKIE, "", 0, origin.startsWith("https:")));
+        res.setHeader("Set-Cookie", [cookie(SESSION_COOKIE, "", 0, this.secure(req)), ...this.legacyClears(req)]);
         const end = this.meta?.end_session_endpoint;
         if (!s || !end) {
             res.redirect("/");

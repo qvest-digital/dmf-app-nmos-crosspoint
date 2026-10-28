@@ -364,3 +364,116 @@ test("a local login replaces the socket's identity, and a failed one signs it ou
         WebsocketSyncServer.instance = saved;
     }
 });
+
+test("a return path longer than 1 KiB is not kept", () => {
+    assert.equal(o.safeReturnPath("/" + "a".repeat(1023)), "/" + "a".repeat(1023));
+    assert.equal(o.safeReturnPath("/" + "a".repeat(1024)), "/");
+});
+
+test("a refused callback clears the state cookie", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp);
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const login = await get(xp.url + "/auth/oidc/login");
+    const auth = idp.authorize(login.headers.get("location"));
+    // A state the cookie was not issued for.
+    const cb = await get(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=other", setCookies(login)[0]);
+    assert.equal(cb.status, 400);
+    assert.ok(setCookies(cb).includes("nmoscrosspoint_oidc_state="));
+});
+
+test("a signed state cookie missing a field or with one of the wrong type is refused", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp);
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const login = await get(xp.url + "/auth/oidc/login");
+    const sc = setCookies(login)[0];
+    const [name, value] = [sc.slice(0, sc.indexOf("=")), decodeURIComponent(sc.slice(sc.indexOf("=") + 1))];
+    const claims = JSON.parse(Buffer.from(value.split(".")[0], "base64url").toString());
+    const auth = idp.authorize(login.headers.get("location"));
+    // Signed with the crosspoint's own key, so only the field check can refuse them.
+    const sign = (c) => {
+        const body = Buffer.from(JSON.stringify(c)).toString("base64url");
+        return body + "." + crypto.createHmac("sha256", xp.signIn.stateKey).update(body).digest("base64url");
+    };
+    const { verifier, ...noVerifier } = claims;
+    for (const [what, c] of [
+        ["no verifier", noVerifier],
+        ["a numeric nonce", { ...claims, nonce: 1 }],
+        ["a string expiry", { ...claims, expires: String(claims.expires) }],
+        ["an object return path", { ...claims, returnTo: { toString: "/" } }],
+    ]) {
+        const cb = await get(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=" + auth.state,
+            name + "=" + encodeURIComponent(sign(c)));
+        assert.equal(cb.status, 400, what);
+    }
+    assert.equal(idp.requests.length, 0);
+    // The same signing, of the cookie as issued, is accepted.
+    const cb = await get(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=" + auth.state,
+        name + "=" + encodeURIComponent(sign(claims)));
+    assert.equal(cb.status, 302);
+});
+
+test("over https both cookies take the __Host- prefix and only that name is read", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp);
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const https = { "x-forwarded-proto": "https" };
+    const login = await fetch(xp.url + "/auth/oidc/login", { redirect: "manual", headers: https });
+    const raw = login.headers.getSetCookie()[0];
+    assert.match(raw, /^__Host-nmoscrosspoint_oidc_state=.*; Path=\/;.*; Secure$/);
+    const stateCookie = raw.split(";")[0];
+    const auth = idp.authorize(login.headers.get("location"));
+    // The unprefixed name, which a sibling host could set, is not read.
+    const plain = await fetch(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=" + auth.state,
+        { redirect: "manual", headers: { ...https, cookie: stateCookie.replace(/^__Host-/, "") } });
+    assert.equal(plain.status, 400);
+    const cb = await fetch(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=" + auth.state,
+        { redirect: "manual", headers: { ...https, cookie: stateCookie } });
+    assert.equal(cb.status, 302);
+    const session = cb.headers.getSetCookie().find((c) => c.startsWith("__Host-" + o.SESSION_COOKIE + "="));
+    assert.ok(session && session.endsWith("; Secure"), "the session cookie is prefixed and Secure");
+    const host = new URL(xp.url).host;
+    const req = (cookie) => ({ headers: { host, origin: "https://" + host, "x-forwarded-proto": "https", cookie } });
+    assert.equal(xp.signIn.identify(req(session.split(";")[0])).user, "alice");
+    assert.equal(xp.signIn.identify(req(session.split(";")[0].replace(/^__Host-/, ""))), null);
+});
+
+// Over https a clear has to name the __Host- cookie and carry Secure: a
+// browser keeps a Secure cookie against a Set-Cookie without it, so a clear
+// sent the http way leaves the cookie in place.
+test("over https a refused callback and a logout clear the prefixed, Secure cookies", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const host = "xp.example";
+    const xp = await crosspoint(idp, { redirectUri: "https://" + host + "/auth/oidc/callback" });
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const raw = (res) => res.headers.getSetCookie();
+    const cleared = (name) => new RegExp("^__Host-" + name + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure$");
+
+    const refused = await get(xp.url + "/auth/oidc/callback?code=x&state=y", "__Host-nmoscrosspoint_oidc_state=garbage");
+    assert.equal(refused.status, 400);
+    assert.ok(raw(refused).some((c) => cleared("nmoscrosspoint_oidc_state").test(c)), raw(refused).join(" | "));
+
+    const out = await fetch(xp.url + "/auth/oidc/logout", { redirect: "manual",
+        headers: { cookie: "__Host-" + o.SESSION_COOKIE + "=gone", "sec-fetch-site": "same-origin" } });
+    assert.equal(out.status, 302);
+    assert.ok(raw(out).some((c) => cleared(o.SESSION_COOKIE).test(c)), raw(out).join(" | "));
+});
+
+test("over https login and logout clear the unprefixed cookies an older crosspoint set", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp, { redirectUri: "https://xp.example/auth/oidc/callback" });
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const legacy = "nmoscrosspoint_oidc_state=old; " + o.SESSION_COOKIE + "=old";
+    const clears = (res) => res.headers.getSetCookie().filter((c) => /^nmoscrosspoint_[a-z_]+=; .*Max-Age=0; Secure$/.test(c))
+        .map((c) => c.split("=")[0]).sort();
+    const login = await get(xp.url + "/auth/oidc/login", legacy);
+    assert.deepEqual(clears(login), ["nmoscrosspoint_oidc_state", "nmoscrosspoint_session"]);
+    const out = await fetch(xp.url + "/auth/oidc/logout", { redirect: "manual", headers: { cookie: legacy } });
+    assert.deepEqual(clears(out), ["nmoscrosspoint_oidc_state", "nmoscrosspoint_session"]);
+    // Nothing to clear, nothing sent; and over http the names were never other.
+    assert.deepEqual(clears(await get(xp.url + "/auth/oidc/login")), []);
+    const plain = await crosspoint(idp);
+    t.after(() => plain.server.close());
+    assert.deepEqual(clears(await get(plain.url + "/auth/oidc/login", legacy)), []);
+});
