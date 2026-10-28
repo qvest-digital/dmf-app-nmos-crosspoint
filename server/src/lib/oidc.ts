@@ -190,7 +190,12 @@ export class OidcSignIn {
     private async login(req: any, res: any) {
         const meta = await this.discover();
         this.prune();
-        if (this.pending.size >= MAX_PENDING) this.pending.delete(this.pending.keys().next().value);
+        // Refused rather than making room: evicting the oldest would let
+        // anyone sending requests here end every sign-in in progress.
+        if (this.pending.size >= MAX_PENDING) {
+            res.status(503).type("text/plain").send("Too many sign-ins in progress. Try again in a few minutes.");
+            return;
+        }
         const state = random(), nonce = random(), verifier = random();
         const redirectUri = this.config.redirectUri || this.origin(req) + CALLBACK_PATH;
         this.pending.set(state, {
@@ -232,6 +237,11 @@ export class OidcSignIn {
             issuer: meta.issuer, audience: this.config.clientId, requiredClaims: ["exp", "iat"],
         });
         if (payload.nonce !== p.nonce) throw new Error("ID token nonce does not match");
+        // A token for several audiences names the party it was issued to;
+        // without that it could have been issued to any of them.
+        if (Array.isArray(payload.aud) && payload.aud.length > 1 && payload.azp === undefined) {
+            throw new Error("ID token has several audiences and no azp");
+        }
         if (payload.azp !== undefined && payload.azp !== this.config.clientId) {
             throw new Error("ID token was issued to " + payload.azp);
         }
@@ -280,6 +290,13 @@ export class OidcSignIn {
     }
 
     private async logout(req: any, res: any) {
+        // A page of another site could otherwise sign a user out by linking
+        // here. A browser that sends no Sec-Fetch-Site is let through.
+        const site = str(req.headers?.["sec-fetch-site"]);
+        if (site && site !== "same-origin" && site !== "none") {
+            res.status(403).type("text/plain").send("Sign out from the crosspoint's own page.");
+            return;
+        }
         const id = parseCookies(req.headers.cookie)[SESSION_COOKIE] || "";
         const s = this.sessions.get(id);
         this.sessions.delete(id);

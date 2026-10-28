@@ -235,3 +235,90 @@ test("a callback is redeemed once", async (t) => {
     const again = await get(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=" + auth.state, stateCookie);
     assert.equal(again.status, 400);
 });
+
+test("an ID token for several audiences has to name this client as azp", async (t) => {
+    for (const [claims, status] of [
+        [{}, 502],
+        [{ azp: "other" }, 502],
+        [{ azp: "crosspoint" }, 302],
+    ]) {
+        const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"], ...claims },
+            { aud: ["crosspoint", "other"] });
+        const xp = await crosspoint(idp);
+        t.after(() => { idp.server.close(); xp.server.close(); });
+        const { cb } = await signInFlow(idp, xp);
+        assert.equal(cb.status, status, JSON.stringify(claims));
+    }
+    // One audience needs no azp.
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp);
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    assert.equal((await signInFlow(idp, xp)).cb.status, 302);
+});
+
+test("a sign-in left unfinished expires", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp);
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const login = await get(xp.url + "/auth/oidc/login");
+    const stateCookie = setCookies(login)[0];
+    const auth = idp.authorize(login.headers.get("location"));
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 10 * 60 * 1000 + 1 });
+    const cb = await get(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=" + auth.state, stateCookie);
+    t.mock.timers.reset();
+    assert.equal(cb.status, 400);
+    assert.equal(idp.requests.length, 0, "the code is never redeemed");
+});
+
+test("a full list of sign-ins in progress refuses a new one and keeps the others", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp);
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const first = await get(xp.url + "/auth/oidc/login");
+    const stateCookie = setCookies(first)[0];
+    const auth = idp.authorize(first.headers.get("location"));
+    for (let i = 1; i < 1000; i++) {
+        assert.equal((await get(xp.url + "/auth/oidc/login")).status, 302);
+    }
+    assert.equal((await get(xp.url + "/auth/oidc/login")).status, 503);
+    // The first one, started before the flood, still completes.
+    const cb = await get(xp.url + "/auth/oidc/callback?code=" + auth.code + "&state=" + auth.state, stateCookie);
+    assert.equal(cb.status, 302);
+});
+
+test("logout is refused from another site's page", async (t) => {
+    const idp = await fakeProvider({ preferred_username: "alice", groups: ["operators"] });
+    const xp = await crosspoint(idp);
+    t.after(() => { idp.server.close(); xp.server.close(); });
+    const { cb } = await signInFlow(idp, xp);
+    const session = setCookies(cb).find((c) => c.startsWith(o.SESSION_COOKIE + "="));
+    const logout = (site) => fetch(xp.url + "/auth/oidc/logout",
+        { redirect: "manual", headers: { cookie: session, "sec-fetch-site": site } });
+    for (const site of ["cross-site", "same-site"]) {
+        assert.equal((await logout(site)).status, 403, site);
+        assert.notEqual(xp.signIn.identify(upgrade(xp, session)), null, "still signed in after " + site);
+    }
+    assert.equal((await logout("same-origin")).status, 302);
+    assert.equal(xp.signIn.identify(upgrade(xp, session)), null);
+});
+
+test("a local login replaces the socket's identity, and a failed one signs it out", () => {
+    const { WebsocketClient } = require("../dist/lib/SyncServer/websocketClient.js");
+    const saved = WebsocketSyncServer.instance;
+    WebsocketSyncServer.instance = { authData: { users: { bob: { password: "pw", groups: ["user"] } } } };
+    try {
+        const sent = [];
+        const socket = { user: "alice", groups: ["admin"], sessionId: "s-1", authSeed: "seed", send: (m) => sent.push(m) };
+        WebsocketClient.prototype.processAuth.call(socket, { user: "bob", password: "wrong" });
+        assert.deepEqual([socket.user, socket.groups, socket.sessionId], ["__noAuth", null, ""]);
+        assert.equal(sent.pop().type, "authfailed");
+
+        const proof = crypto.createHash("sha256").update("pw" + "seed").digest("hex");
+        Object.assign(socket, { groups: ["admin"], sessionId: "s-2" });
+        WebsocketClient.prototype.processAuth.call(socket, { user: "bob", password: proof });
+        assert.deepEqual([socket.user, socket.groups, socket.sessionId], ["bob", null, ""],
+            "a local user's groups come from users.json, not from the session it replaced");
+    } finally {
+        WebsocketSyncServer.instance = saved;
+    }
+});
