@@ -34,7 +34,7 @@ spec:
             - -c
             - |
               set -eu
-              [ -f /config/settings.json ] || cp /seed/settings.json /config/settings.json
+              node /seed/merge-settings.js
               cp /users/users.json /config/users.json
           volumeMounts:
             - {name: seed, mountPath: /seed}

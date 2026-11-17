@@ -68,6 +68,15 @@ data:
         "connectVersions": ["v1.2", "v1.1", "v1.0"]
       }
     }
+  # The crosspoint writes settings.json itself (minted identifiers, probe
+  # token), so the chart only takes over the registry on each start.
+  merge-settings.js: |
+    const fs = require("fs");
+    const seed = JSON.parse(fs.readFileSync("/seed/settings.json", "utf8"));
+    const path = "/config/settings.json";
+    const settings = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : seed;
+    settings.staticNmosRegistries = seed.staticNmosRegistries;
+    fs.writeFileSync(path, JSON.stringify(settings, null, 4));
 ---
 # The name is fixed: the claim holds the crosspoint's state, so a release
 # that renames it starts from an empty volume.
