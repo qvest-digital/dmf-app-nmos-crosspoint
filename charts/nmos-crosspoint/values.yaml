@@ -1,0 +1,46 @@
+nameOverride: ""
+
+# Namespace of the crosspoint and of its login secret. Its Keycloak client is
+# reconciled in keycloak.namespace, where the Keycloak operator looks for it.
+namespace: nmos
+keycloak:
+  namespace: keycloak
+  realm: dmf
+  # Name of the Keycloak CR that the client is reconciled against.
+  crName: keycloak
+  # Issuer and public host, without the trailing realm path. Per environment.
+  issuer: ""
+  publicHost: ""
+
+image:
+  repository: ghcr.io/qvest-digital/dmf-app-nmos-crosspoint
+  tag: "4.56"
+  digest: sha256:767265a22165c861ef1611c4e6c6f0df8cfc4529c3b5a6b29dcf54b2d104e0b2
+
+# Registry the crosspoint queries through its Query API. The name is used
+# rather than mDNS discovery because mDNS does not reach a pod.
+registry:
+  ip: ""
+  port: 8010
+  priority: 10
+
+# Path in the secrets manager of the admin password, which the chart copies
+# into the local admin login.
+adminPasswordSecretKey: ""
+secretStoreName: aws-secretsmanager
+
+# Empty uses the cluster default.
+storageClassName: ""
+
+httpRoute:
+  gatewayName: istio-ingressgateway
+  gatewayNamespace: istio-system
+  sectionName: https
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi

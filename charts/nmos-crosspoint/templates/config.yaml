@@ -1,0 +1,86 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: nmos-crosspoint-users
+  namespace: {{ .Values.namespace }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ .Values.secretStoreName }}
+  target:
+    name: nmos-crosspoint-users
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        # Every permission set needs all four lists: the check reads denyRead
+        # and denyWrite too, and a missing list denies everything.
+        users.json: |
+          {
+            "oidc": {
+              "issuer": "{{ .Values.keycloak.issuer }}/realms/{{ .Values.keycloak.realm }}",
+              "clientId": "nmos-crosspoint",
+              "redirectUri": "https://{{ .Values.keycloak.publicHost }}/auth/oidc/callback",
+              "groupsClaim": "roles",
+              "groupMap": {"nmos-crosspoint-admin": ["user", "admin"]},
+              "label": "DMF"
+            },
+            "users": {
+              "admin": {"password": "{{ `{{ .password | sha256sum }}` }}", "groups": ["user", "admin"]}
+            },
+            "permissions": {
+              "global": {
+                "allowRead": {"users": [], "groups": ["user"]},
+                "allowWrite": {"users": [], "groups": ["user"]},
+                "denyRead": {"users": [], "groups": []},
+                "denyWrite": {"users": [], "groups": []}
+              },
+              "public": {
+                "allowRead": {"users": [], "groups": ["user"]},
+                "allowWrite": {"users": [], "groups": []},
+                "denyRead": {"users": [], "groups": []},
+                "denyWrite": {"users": [], "groups": []}
+              }
+            }
+          }
+  data:
+    - secretKey: password
+      remoteRef:
+        key: {{ .Values.adminPasswordSecretKey | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nmos-crosspoint
+  namespace: {{ .Values.namespace }}
+data:
+  settings.json: |
+    {
+      "staticNmosRegistries": [
+        {"ip": "{{ .Values.registry.ip }}", "port": {{ .Values.registry.port }}, "priority": {{ .Values.registry.priority }}, "domain": ""}
+      ],
+      "logFiles": "./log/",
+      "logOutput": true,
+      "server": {"port": 80, "address": "0.0.0.0"},
+      "nmos": {
+        "registryVersions": ["v1.3", "v1.2"],
+        "connectVersions": ["v1.2", "v1.1", "v1.0"]
+      }
+    }
+---
+# The name is fixed: the claim holds the crosspoint's state, so a release
+# that renames it starts from an empty volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nmos-crosspoint-state
+  namespace: {{ .Values.namespace }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: 1Gi
