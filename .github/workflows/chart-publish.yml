@@ -1,0 +1,37 @@
+name: chart-publish
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - charts/nmos-crosspoint/**
+      - .github/workflows/chart-publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: chart-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint charts/nmos-crosspoint
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" |
+            helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Package and push
+        run: |
+          set -euo pipefail
+          helm package charts/nmos-crosspoint --destination /tmp/chart
+          helm push /tmp/chart/nmos-crosspoint-*.tgz "oci://ghcr.io/${{ github.repository }}/charts"

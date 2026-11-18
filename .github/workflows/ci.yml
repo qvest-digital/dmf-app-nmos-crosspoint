@@ -18,6 +18,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: helm lint charts/nmos-crosspoint
+      - run: helm template nmos-crosspoint charts/nmos-crosspoint > /dev/null
+      - run: node --test server/test/chartSettings.test.js
+
   server:
     runs-on: ubuntu-latest
     timeout-minutes: 15

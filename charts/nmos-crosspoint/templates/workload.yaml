@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nmos-crosspoint
+  namespace: {{ .Values.namespace }}
+  annotations:
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 1
+  # One writer of the state volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nmos-crosspoint
+  template:
+    metadata:
+      labels:
+        app: nmos-crosspoint
+    spec:
+      # The image runs as root and binds port 80, so that one capability is
+      # kept; everything else it could be given is dropped.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      # settings.json and users.json are copied into the writable config
+      # directory: the crosspoint rewrites settings.json on start to add the
+      # identifiers it mints, so a read-only mount would lose them.
+      initContainers:
+        - name: config
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              node /seed/merge-settings.js
+              cp /users/users.json /config/users.json
+          volumeMounts:
+            - {name: seed, mountPath: /seed}
+            - {name: users, mountPath: /users}
+            - {name: state, mountPath: /config, subPath: config}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: crosspoint
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}
+          ports:
+            - {name: http, containerPort: 80}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [NET_BIND_SERVICE]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket: {port: 80}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: 80}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - {name: state, mountPath: /nmos-crosspoint/server/config, subPath: config}
+            - {name: state, mountPath: /nmos-crosspoint/server/state, subPath: state}
+      volumes:
+        - name: seed
+          configMap:
+            name: nmos-crosspoint
+        - name: users
+          secret:
+            secretName: nmos-crosspoint-users
+        - name: state
+          persistentVolumeClaim:
+            claimName: nmos-crosspoint-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nmos-crosspoint
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: nmos-crosspoint
+  ports:
+    - {name: http, port: 80, targetPort: 80}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: nmos-crosspoint
+  namespace: {{ .Values.namespace }}
+spec:
+  parentRefs:
+    - name: {{ .Values.httpRoute.gatewayName }}
+      namespace: {{ .Values.httpRoute.gatewayNamespace }}
+      sectionName: {{ .Values.httpRoute.sectionName }}
+  hostnames:
+    - {{ .Values.keycloak.publicHost }}
+  rules:
+    - backendRefs:
+        - name: nmos-crosspoint
+          port: 80
