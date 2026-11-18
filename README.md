@@ -141,7 +141,8 @@ The default account is `admin / admin`. Change it from Setup → "Change Login &
 The publishing workflow pushes `charts/nmos-crosspoint` to
 `oci://ghcr.io/qvest-digital/dmf-app-nmos-crosspoint/charts/nmos-crosspoint`.
 It stores configuration and state on the `nmos-crosspoint-data` PVC.
-Registry values are applied on each pod start; other saved settings are kept.
+Registry values and the listener (port 80, address `0.0.0.0`) are applied on each
+pod start; other saved settings are kept.
 The Keycloak client `nmos-crosspoint` is provisioned separately, with redirect
 URIs `https://<publicHost>/auth/oidc/callback` and `https://<publicHost>/`.
 

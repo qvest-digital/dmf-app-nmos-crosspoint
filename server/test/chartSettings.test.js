@@ -54,9 +54,22 @@ test("registry changes preserve operator settings and generated identities", () 
     assert.deepEqual(merge(JSON.stringify(persisted)), {
         ...persisted,
         staticNmosRegistries: seed.staticNmosRegistries,
+        server: seed.server,
     });
 });
 
 test("invalid persisted settings fail instead of resetting operator configuration", () => {
     assert.throws(() => merge("{invalid"), { name: "SyntaxError" });
+});
+
+test("a restored listener matches the chart while other settings survive", () => {
+    const restored = {
+        ...seed,
+        server: { port: 8080, address: "127.0.0.1" },
+        audioMonitor: { enabled: true },
+    };
+    assert.deepEqual(merge(JSON.stringify(restored)), {
+        ...restored,
+        server: seed.server,
+    });
 });
