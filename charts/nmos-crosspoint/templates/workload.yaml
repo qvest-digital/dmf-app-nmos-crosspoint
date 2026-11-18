@@ -75,7 +75,7 @@ spec:
             secretName: nmos-crosspoint-users
         - name: state
           persistentVolumeClaim:
-            claimName: nmos-crosspoint-state
+            claimName: nmos-crosspoint-data
 ---
 apiVersion: v1
 kind: Service
@@ -104,23 +104,3 @@ spec:
     - backendRefs:
         - name: nmos-crosspoint
           port: 80
----
-# The operator reconciles a client only in its Keycloak CR's namespace and
-# takes the name as the clientId. The root URI is the post-logout return,
-# which Keycloak checks against the redirect URIs.
-apiVersion: k8s.keycloak.org/v2alpha1
-kind: KeycloakOIDCClient
-metadata:
-  name: nmos-crosspoint
-  namespace: {{ .Values.keycloak.namespace }}
-spec:
-  keycloakCRName: {{ .Values.keycloak.crName }}
-  realm: {{ .Values.keycloak.realm }}
-  client:
-    displayName: NMOS Crosspoint
-    enabled: true
-    loginFlows:
-      - STANDARD
-    redirectUris:
-      - https://{{ .Values.keycloak.publicHost }}/auth/oidc/callback
-      - https://{{ .Values.keycloak.publicHost }}/

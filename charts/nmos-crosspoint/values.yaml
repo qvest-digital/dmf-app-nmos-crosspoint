@@ -1,13 +1,8 @@
-nameOverride: ""
-
-# Namespace of the crosspoint and of its login secret. Its Keycloak client is
-# reconciled in keycloak.namespace, where the Keycloak operator looks for it.
+# Namespace of the crosspoint and of its login secret.
 namespace: nmos
+# The nmos-crosspoint client is provisioned separately, not by this chart.
 keycloak:
-  namespace: keycloak
   realm: dmf
-  # Name of the Keycloak CR that the client is reconciled against.
-  crName: keycloak
   # Issuer and public host, without the trailing realm path. Per environment.
   issuer: ""
   publicHost: ""

@@ -136,6 +136,15 @@ That starts the Crosspoint container. Point a browser at the host IP on port 80.
 
 The default account is `admin / admin`. Change it from Setup → "Change Login & Password" on first run.
 
+### Helm chart
+
+The publishing workflow pushes `charts/nmos-crosspoint` to
+`oci://ghcr.io/qvest-digital/dmf-app-nmos-crosspoint/charts/nmos-crosspoint`.
+It stores configuration and state on the `nmos-crosspoint-data` PVC.
+Registry values are applied on each pod start; other saved settings are kept.
+The Keycloak client `nmos-crosspoint` is provisioned separately, with redirect
+URIs `https://<publicHost>/auth/oidc/callback` and `https://<publicHost>/`.
+
 ### Single sign-on (OpenID Connect)
 
 Add an `oidc` block to `users.json` and restart. The login dialog then offers "Sign in with <label>" next to the local login, which keeps working.

@@ -78,12 +78,10 @@ data:
     settings.staticNmosRegistries = seed.staticNmosRegistries;
     fs.writeFileSync(path, JSON.stringify(settings, null, 4));
 ---
-# The name is fixed: the claim holds the crosspoint's state, so a release
-# that renames it starts from an empty volume.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: nmos-crosspoint-state
+  name: nmos-crosspoint-data
   namespace: {{ .Values.namespace }}
 spec:
   accessModes: [ReadWriteOnce]
