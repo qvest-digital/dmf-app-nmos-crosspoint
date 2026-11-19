@@ -6,6 +6,7 @@
 
     import { Icon, ExclamationTriangle, CheckCircle, Plus, Trash } from "svelte-hero-icons";
     import HelpTip from "../lib/HelpTip.svelte";
+    import Logo from "../lib/Logo.svelte";
 
     interface VendorProfile {
       id: string;
@@ -39,6 +40,8 @@
       deviceId?: string;
       nodeId?: string;
     }
+    // One pool in the lease stats; key "default" or the limit as text.
+    interface PoolStat { key:string, label:string, name?:string, maxMbps:number|null, cidr:string, used:number, total:number }
     interface SetupConfig {
       registry: { ip:string, port:number };
       acceptableGmid: string;
@@ -46,12 +49,15 @@
       virtualSenders: VirtualSender[];
       virtualNode: VirtualNodeCfg;
       multicastRange: string;
+      // Pools by bandwidth on top of the default pool (multicastRange).
+      multicastPools?: Array<{ maxMbps:number, range:string, name?:string }>;
+      multicastDefaultPoolName?: string;
       autoMulticast: { enabled: boolean, reconnectReceiversOnSenderChange?: boolean };
       autoActivateInactiveSender: boolean;
       audioMonitor: { enabled: boolean };
       bcp008: { enabled: boolean };
       // pool = the single-range counter; per-cat fields kept for back-compat
-      multicastStats: { pool?: LeaseStat, audio?: LeaseStat, video?: LeaseStat };
+      multicastStats: { pool?: LeaseStat, pools?: PoolStat[], audio?: LeaseStat, video?: LeaseStat };
       ddns: Ddns;
       auth: { users: string[] };
       restartRequired: boolean;
@@ -90,6 +96,43 @@
     let formDnssdEnabled:boolean = true;
     let formDnssdDomain:string = "";
     let formMulticastRange:string = "";
+    // Pools by bandwidth, as edited: the limit stays text while typing.
+    let formMulticastPools: Array<{ id:string, maxMbps:string, range:string, name:string }> = [];
+    let formMulticastDefaultPoolName:string = "";
+    function poolRowsFrom(pools:any):Array<{ id:string, maxMbps:string, range:string, name:string }>{
+      return (Array.isArray(pools) ? pools : []).map((p:any, i:number) => ({
+        id: "pool-" + i + "-" + Math.random().toString(36).slice(2, 7),
+        maxMbps: (typeof p.maxMbps === "number") ? String(p.maxMbps) : "",
+        range: p.range || "",
+        name: p.name || ""
+      }));
+    }
+    function addPool(){
+      formMulticastPools = [...formMulticastPools, { id: "pool-" + Math.random().toString(36).slice(2, 9), maxMbps: "", range: "", name: "" }];
+      markDirty();
+    }
+    function removePool(id:string){
+      formMulticastPools = formMulticastPools.filter(p => p.id !== id);
+      markDirty();
+    }
+    // The form's pools as the server stores them: numbers, sorted, empty rows gone.
+    function poolPayload(){
+      return formMulticastPools
+        .filter(p => (p.maxMbps || "").trim() !== "" || (p.range || "").trim() !== "" || (p.name || "").trim() !== "")
+        .map(p => {
+          const out:any = { maxMbps: Number((p.maxMbps || "").replace(",", ".").trim()), range: (p.range || "").trim() };
+          if((p.name || "").trim()){ out.name = p.name.trim(); }
+          return out;
+        })
+        .sort((a, b) => a.maxMbps - b.maxMbps);
+    }
+    // "used / total" of the pool a row shows, "–" while the row differs
+    // from what is saved. The snapshot is passed in, not read inside, so the
+    // template redraws when new stats arrive.
+    function poolUsed(snap:any, key:string, cidr:string):string{
+      const st:PoolStat|undefined = (snap?.stats?.pools || []).find((p:PoolStat) => p.key === key);
+      return (st && st.cidr === (cidr || "").trim()) ? st.used + " / " + st.total : "–";
+    }
 
     // Credentials form (independent of the main Save flow. Saved via its own
     // route). The sha256 hashes are computed at submit time so the plaintext
@@ -189,6 +232,8 @@
             formDnssdEnabled         = !(obj.registryDiscovery && obj.registryDiscovery.unicastDnssd === false);
             formDnssdDomain          = (obj.registryDiscovery && typeof obj.registryDiscovery.domain === "string") ? obj.registryDiscovery.domain : "";
             formMulticastRange       = (typeof obj.multicastRange === "string") ? obj.multicastRange : "";
+            formMulticastPools       = poolRowsFrom(obj.multicastPools);
+            formMulticastDefaultPoolName = (typeof obj.multicastDefaultPoolName === "string") ? obj.multicastDefaultPoolName : "";
             // Pre-fill the credentials form with the first configured user
             // so the operator doesn't have to type their own username.
             if(obj.auth && Array.isArray(obj.auth.users) && obj.auth.users.length > 0){
@@ -283,6 +328,8 @@
       formDnssdEnabled         = !((serverState as any).registryDiscovery && (serverState as any).registryDiscovery.unicastDnssd === false);
       formDnssdDomain          = ((serverState as any).registryDiscovery && typeof (serverState as any).registryDiscovery.domain === "string") ? (serverState as any).registryDiscovery.domain : "";
       formMulticastRange       = serverState.multicastRange || "";
+      formMulticastPools       = poolRowsFrom(serverState.multicastPools);
+      formMulticastDefaultPoolName = serverState.multicastDefaultPoolName || "";
       if(serverState.ddns){
         formDdnsEnabled      = !!serverState.ddns.enabled;
         formDdnsServer       = serverState.ddns.server || "";
@@ -319,8 +366,23 @@
       // Multicast range. Basic CIDR sanity check (single shared pool now)
       let cidrRe = /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/;
       if(formMulticastRange && !cidrRe.test(formMulticastRange.trim())){
-        saveError = "Multicast Range must use CIDR notation, e.g. 239.30.0.0/16";
+        saveError = "Multicast DHCP: the default pool must use CIDR notation, e.g. 239.30.0.0/16";
         return;
+      }
+      // Pools by bandwidth: the obvious mistakes here; overlaps between
+      // ranges are checked by the server, which refuses the save then.
+      let poolsOut = poolPayload();
+      let limitsSeen:number[] = [];
+      let namesSeen:string[] = formMulticastDefaultPoolName.trim() ? [formMulticastDefaultPoolName.trim().toLowerCase()] : [];
+      for(let p of poolsOut){
+        if(p.name){
+          if(namesSeen.includes(p.name.toLowerCase())){ saveError = "Multicast DHCP: two pools are named \"" + p.name + "\"."; return; }
+          namesSeen.push(p.name.toLowerCase());
+        }
+        if(!(p.maxMbps > 0) || !isFinite(p.maxMbps)){ saveError = "Multicast DHCP: every pool needs a limit in Mbit/s above 0."; return; }
+        if(limitsSeen.includes(p.maxMbps)){ saveError = "Multicast DHCP: two pools have the limit " + p.maxMbps + " Mbit/s."; return; }
+        limitsSeen.push(p.maxMbps);
+        if(!cidrRe.test(p.range)){ saveError = "Multicast DHCP: the pool up to " + p.maxMbps + " Mbit/s needs a CIDR range, e.g. 239.40.0.0/16"; return; }
       }
 
       // DDNS validation
@@ -351,6 +413,8 @@
         virtualSenders: formVirtualSenders.map(v => ({ id: v.id, name: v.name, sdp: v.sdp })),
         virtualNode: { enabled: formVirtualNodeEnabled },
         multicastRange: formMulticastRange.trim(),
+        multicastPools: poolsOut,
+        multicastDefaultPoolName: formMulticastDefaultPoolName.trim(),
         autoMulticast: {
           enabled: formAutoMulticastEnabled,
           reconnectReceiversOnSenderChange: formReconnectReceivers
@@ -384,8 +448,14 @@
       let rangeAfter  = formMulticastRange.trim();
       let rangeChanged = nowEnabled && wasEnabled && rangeBefore && rangeAfter && rangeBefore !== rangeAfter;
       let enabledNow   = !wasEnabled && nowEnabled;
+      //   c) Auto-Allocation is on and the pools by bandwidth changed: keep
+      //      every lease where it is, or re-sort everyone by bitrate.
+      // Names do not move addresses: only limits and ranges count here.
+      let poolsBefore  = JSON.stringify((serverState.multicastPools || []).map(p => ({ maxMbps: p.maxMbps, range: p.range })));
+      let poolsAfter   = JSON.stringify(poolsOut.map((p:any) => ({ maxMbps: p.maxMbps, range: p.range })));
+      let poolsChanged = nowEnabled && wasEnabled && poolsBefore !== poolsAfter;
 
-      if(enabledNow || rangeChanged){
+      if(enabledNow || rangeChanged || poolsChanged){
         pendingPayload = payload;
         if(autoMulticastModal){ autoMulticastModal.showModal(); }
         return;
@@ -523,6 +593,10 @@
       createdAt: string;
       bitrate: any;
       liveStatus: "active" | "inactive" | "missing";
+      pool: string;        // pool the lease lies in, by name or limit ("" = outside every pool)
+      poolLimit: string;   // its limit ("≤ 2 Mbit/s", "∞"), shown on hover
+      wantPool: string;    // pool its bitrate calls for
+      misplaced: boolean;  // the two differ: "Renew from Pool" moves it
     }
     let leaseRows:LeaseRow[] = [];
     $: leaseRows = recomputeLeaseRows(leaseSnapshot, inventoryFilter, inventoryCategoryFilter);
@@ -550,7 +624,11 @@
           port: l.port || 0,
           createdAt: l.createdAt || "",
           bitrate: l.bitrate,
-          liveStatus: l.liveStatus || "missing"
+          liveStatus: l.liveStatus || "missing",
+          pool: l.pool || "",
+          poolLimit: l.poolLimit || "",
+          wantPool: l.wantPool || "",
+          misplaced: !!(l.wantPoolKey && l.poolKey !== l.wantPoolKey)
         });
       }
       arr.sort((a,b) => {
@@ -1037,23 +1115,73 @@
           </ul>
           <p>Manual overrides on the Details page are respected: typing a different IP marks it as the
           effective address; clearing the field reverts to the reserved address.</p>
+          <p><strong>Pools by bandwidth:</strong> a sender gets its pair from the smallest pool whose
+          limit covers its bitrate per leg (the limit included). Higher bitrates, and senders whose
+          bitrate is unknown, go into the <em>default</em> pool. A full pool hands out nothing: the
+          sender keeps its address and the log says so. Leases stay where they are when you change the
+          pools; <em>Renew from Pool</em> sorts every active sender in again.</p>
         </HelpTip>
         <input type="checkbox" class="toggle setup-head-toggle" aria-label="Enable Multicast DHCP"
                bind:checked={formAutoMulticastEnabled} on:change={markDirty} />
       </div>
 
       <div class="setup-form">
-        <label class="setup-field">
-          <span class="setup-label">Multicast Range (single pool for all senders)</span>
-          <div class="setup-range-row">
-            <input type="text" class="input input-bordered vendor-mono" placeholder="239.30.0.0/16"
-                   bind:value={formMulticastRange} on:input={markDirty} />
-            <span class="setup-range-stat">{leaseSnapshot.stats?.pool?.used ?? 0} / {leaseSnapshot.stats?.pool?.total ?? 0} pairs used</span>
+        <div class="setup-field setup-pools">
+          <span class="setup-label">Pools by bandwidth</span>
+          <div class="vendor-table-wrap">
+            <table class="vendor-table pool-table">
+              <thead>
+                <tr><th>Name</th><th>Bitrate per leg</th><th>Range</th><th>Pairs used</th><th></th></tr>
+              </thead>
+              <tbody>
+                {#each formMulticastPools as p (p.id)}
+                  <tr>
+                    <td>
+                      <input type="text" class="input input-bordered input-sm pool-name-input" maxlength="40"
+                             placeholder="e.g. Audio" aria-label="Pool name" bind:value={p.name} on:input={markDirty} />
+                    </td>
+                    <td>
+                      <span class="pool-limit">up to
+                        <input type="text" inputmode="decimal" class="input input-bordered input-sm pool-limit-input"
+                               placeholder="2" aria-label="Limit in Mbit/s" bind:value={p.maxMbps} on:input={markDirty} />
+                        Mbit/s</span>
+                    </td>
+                    <td>
+                      <input type="text" class="input input-bordered input-sm vendor-mono pool-range-input"
+                             placeholder="239.40.0.0/16" aria-label="Range" bind:value={p.range} on:input={markDirty} />
+                    </td>
+                    <td class="vendor-mono pool-used">{poolUsed(leaseSnapshot, String(Number((p.maxMbps || "").replace(",", "."))), p.range)}</td>
+                    <td>
+                      <button class="btn btn-ghost btn-sm" on:click={()=>removePool(p.id)}
+                              aria-label="Remove pool" title="Remove">
+                        <Icon src={Trash} />
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+                <tr class="pool-default">
+                  <td>
+                    <input type="text" class="input input-bordered input-sm pool-name-input" maxlength="40"
+                           placeholder="default" aria-label="Default pool name" bind:value={formMulticastDefaultPoolName} on:input={markDirty} />
+                  </td>
+                  <td><span class="pool-inf">∞</span> <span class="pool-default-name">default</span></td>
+                  <td>
+                    <input type="text" class="input input-bordered input-sm vendor-mono pool-range-input"
+                           placeholder="239.30.0.0/16" aria-label="Default range" bind:value={formMulticastRange} on:input={markDirty} />
+                  </td>
+                  <td class="vendor-mono pool-used">{poolUsed(leaseSnapshot, "default", formMulticastRange)}</td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        </label>
+          <div class="vendor-actions-row">
+            <button class="btn btn-sm" on:click={addPool}><Icon src={Plus} /> Add pool</button>
+          </div>
+        </div>
       </div>
 
-      <div class="setup-form" style="margin-top:14px; align-items:center;">
+      <div class="setup-form setup-form-buttons">
         <button class="btn btn-sm" on:click={exportLeases}>Export Leases</button>
         <button class="btn btn-sm" on:click={pickImportFile}>Import Leases…</button>
         <input type="file" accept="application/json,.json" style="display:none;" bind:this={importFileInput} on:change={onImportFile} />
@@ -1099,6 +1227,7 @@
               <tr>
                 <th>Status</th>
                 <th>Category</th>
+                <th>Pool</th>
                 <th>Device</th>
                 <th>Sender ID</th>
                 <th>Leg 1 (primary)</th>
@@ -1128,6 +1257,12 @@
                       <span class="lease-channels">{r.channels}ch</span>
                     {/if}
                   </td>
+                  <td class="lease-pool">
+                    {#if r.pool}<span class="lease-pool-badge" title={r.pool !== r.poolLimit ? r.poolLimit : ""}>{r.pool}</span>{:else}<span class="lease-pool-none" title="The lease lies in none of the pools (e.g. an address kept with Keep current IPs)">outside</span>{/if}
+                    {#if r.misplaced}
+                      <span class="lease-pool-want" title="Its bitrate calls for {r.wantPool}. Renew from Pool moves it there.">→ {r.wantPool}</span>
+                    {/if}
+                  </td>
                   <td>{r.deviceLabel || "-"}</td>
                   <td><span class="vendor-mono" title={r.senderId}>{shortId(r.senderId)}</span></td>
                   <td class="vendor-mono">{r.primaryIp || "-"}</td>
@@ -1145,7 +1280,7 @@
                 </tr>
               {/each}
               {#if leaseRows.length === 0}
-                <tr><td colspan="10" class="vendor-empty">
+                <tr><td colspan="11" class="vendor-empty">
                   {Object.keys(leaseSnapshot.leases || {}).length === 0
                     ? "No leases allocated yet."
                     : "No leases match the current filter."}
@@ -1178,7 +1313,7 @@
       </div>
 
       {#if !formVirtualNodeEnabled && formVirtualSenders.length > 0}
-        <div class="alert alert-warning setup-alert" style="margin-bottom:12px;">
+        <div class="alert alert-warning setup-alert">
           <Icon src={ExclamationTriangle} />
           <span>
             Virtual Node disabled &mdash; the senders listed below stay in <code>settings.json</code>
@@ -1211,7 +1346,7 @@
                      placeholder="Sender name (e.g. PlayoutA)"
                      bind:value={v.name} on:input={markDirty} />
             </label>
-            <label class="setup-field" style="margin-top:8px;">
+            <label class="setup-field" style="margin-top:6px;">
               <span class="setup-label">SDP</span>
               <textarea class="textarea textarea-bordered vendor-mono virtual-sender-sdp"
                         rows="8" placeholder="Paste a full SDP here…&#10;v=0&#10;o=- 0 0 IN IP4 …&#10;s=…&#10;m=audio 5004 RTP/AVP 96&#10;c=IN IP4 239.x.x.x/32&#10;a=rtpmap:96 L24/48000/2"
@@ -1221,10 +1356,10 @@
         </details>
       {/each}
       {#if formVirtualSenders.length === 0}
-        <p class="vendor-empty" style="margin:8px 0 12px 0;">No virtual senders defined.</p>
+        <p class="vendor-empty">No virtual senders defined.</p>
       {/if}
 
-      <div class="vendor-actions-row" style="margin-top:8px;">
+      <div class="vendor-actions-row">
         <button class="btn btn-sm" on:click={addVirtualSender}>
           <Icon src={Plus} /> Add virtual sender
         </button>
@@ -1399,7 +1534,7 @@
       </div>
 
       <div class="setup-form">
-        <label class="setup-field setup-field-narrow">
+        <label class="setup-field setup-field-select">
           <span class="setup-label">Authentication</span>
           <select class="select select-bordered" bind:value={formDdnsKeyAlgorithm} on:change={markDirty}>
             <option value="hmac-sha256">hmac-sha256</option>
@@ -1512,8 +1647,8 @@
         </label>
       </div>
 
-      <div class="setup-form" style="margin-top:14px; align-items:center;">
-        <button class="btn btn-primary" on:click={saveCredentials} disabled={credSaving}>
+      <div class="setup-form setup-form-buttons">
+        <button class="btn btn-primary btn-sm" on:click={saveCredentials} disabled={credSaving}>
           {#if credSaving}Saving…{:else}Update credentials{/if}
         </button>
         {#if credSuccess}
@@ -1532,6 +1667,22 @@
         {#if saving}Saving…{:else}Save{/if}
       </button>
     </div>
+
+
+    <section class="setup-about">
+      <h3>About</h3>
+      <div class="about-brand">
+        <Logo size={38} />
+        <b>NMOS Crosspoint<span class="v3-badge">V3</span></b>
+        {#if serverState.version}<span class="about-version">v{serverState.version}</span>{/if}
+      </div>
+      <dl>
+        <dt>V3</dt><dd>Oliver Ettlin (Gemini2350), Simplexity</dd>
+        <dt>Original</dt><dd>Johannes Grieb, 2021</dd>
+        <dt>License</dt><dd><a href="https://github.com/Gemini2350/nmos-crosspoint_v3/blob/master/LICENSE.md" target="_blank" rel="noopener noreferrer">MIT</a></dd>
+        <dt>Source</dt><dd><a href="https://github.com/Gemini2350/nmos-crosspoint_v3" target="_blank" rel="noopener noreferrer">github.com/Gemini2350/nmos-crosspoint_v3</a></dd>
+      </dl>
+    </section>
   </div>
 </div>
 
