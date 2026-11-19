@@ -2,6 +2,7 @@
     import { onMount, tick } from "svelte";
     import ServerConnector from "./ServerConnectorService";
     import { Icon, User, Key } from "svelte-hero-icons";
+    import Logo from "../Logo.svelte";
 
 
 let feedbackList:any[]= [];
@@ -51,11 +52,13 @@ onMount(async()=>{
     })
 });
 
+// A click on a message runs its action (the connection feedback opens the
+// log), otherwise it closes the message. The ✕ always closes it.
 function click(feedback:any){
     if(feedback.click){
         feedback.click();
     }else{
-        feedback.hidden = true;
+        ServerConnector.dismissFeedback(feedback.id);
     }
 }
 
@@ -78,6 +81,7 @@ function doLogin(){
         <form method="dialog">
             <button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
         </form>
+        <div class="login-brand"><Logo size={46} /><span>NMOS Crosspoint<span class="v3-badge">V3</span></span></div>
         <h3 class="text-lg font-bold">Login</h3>
         <div class="form-control">
             <div class="pt-8">
@@ -121,21 +125,23 @@ function doLogin(){
     {#each feedbackList as feedback}
         {#if !feedback.hidden }
             <div class="alert alert-{feedback.level}" on:click={()=>{click(feedback);}}>
-                <span class="alert-title">{feedback.message}</span>
-
-                {#if feedback.data.type == "connection"}
-                    <span class="alert-text text-success">Flows connectd: {feedback.data.result.success}</span>
-                    {#if feedback.data.result.disconnect }
-                        <span class="alert-text text-info">Flows disconnected: {feedback.data.result.disconnect}</span>
-                    {/if}
-                    {#if feedback.data.result.failed }
-                        <span class="alert-text text-error">Flows failed: {feedback.data.result.failed}</span>
+                <button class="alert-close btn btn-xs btn-circle btn-ghost" aria-label="Close"
+                        on:click|stopPropagation={()=>ServerConnector.dismissFeedback(feedback.id)}>✕</button>
+                {#if feedback.data.type == "connection" && (feedback.data.result.success || feedback.data.result.disconnect || feedback.data.result.failed)}
+                    <!-- One line of counts ("1 connected · 1 failed"), then
+                         the devices' own reasons, one per line. -->
+                    <span class="alert-title alert-counts">
+                        {#if feedback.data.result.success}<span class="text-success">{feedback.data.result.success} connected</span>{/if}
+                        {#if feedback.data.result.disconnect}<span class="text-info">{feedback.data.result.disconnect} disconnected</span>{/if}
+                        {#if feedback.data.result.failed}<span class="text-error">{feedback.data.result.failed} failed</span>{/if}
+                    </span>
+                    {#if feedback.data.result.failed}
                         <span class="alert-detail">
-                            {#each feedback.data.result.reasons as r}
-                            {r} 
-                            {/each}
+                            {#each feedback.data.result.reasons as r}<span>{r}</span>{/each}
                         </span>
                     {/if}
+                {:else}
+                    <span class="alert-title">{feedback.message}</span>
                 {/if}
             </div>
         {/if}

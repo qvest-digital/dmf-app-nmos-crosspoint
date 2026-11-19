@@ -287,14 +287,36 @@ label svg { width:20px;}
             display:flex;
             flex-direction:column;
             align-items: start;
-            gap:8px;
-            
+            gap:2px;
+            position: relative;
+            padding: 8px 34px 8px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            max-width: 440px;
+            white-space: normal;
+
+            .alert-close {
+                position: absolute;
+                top: 5px;
+                right: 5px;
+            }
+            // flex, so the line breaks between the spans add no space
+            .alert-counts { display: flex; }
+            .alert-counts > span + span::before {
+                content: "·";
+                margin: 0 6px;
+                color: theme('colors.base-content');
+                opacity: 0.5;
+            }
 
             .alert-title {
                 font-weight: 600;
             }
             .alert-detail {
-                font-size: 14px;
+                display: flex;
+                flex-direction: column;
+                font-size: 0.8rem;
+                opacity: 0.85;
             }
         }
     }
@@ -321,4 +343,28 @@ html[data-theme="light"] {
 }
 
 
+}
+
+// Login dialog: the logo and the name above "Login". Global: the dialog
+// lives outside every page root.
+.login-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 4px 0 18px;
+    > span { font-size: 1.35rem; font-weight: 750; letter-spacing: -0.02em; }
+}
+
+// The green "V3" after the name, as in the explainer video's title.
+.v3-badge {
+    display: inline-block;
+    margin-left: 7px;
+    padding: 0 6px;
+    border-radius: 5px;
+    background: #34d399;
+    color: #0a0e13;
+    font: 700 0.65rem/1.5 "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: 0;
+    position: relative;
+    top: -0.45em;
 }
