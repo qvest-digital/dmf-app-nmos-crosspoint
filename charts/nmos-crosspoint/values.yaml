@@ -9,8 +9,8 @@ keycloak:
 
 image:
   repository: ghcr.io/qvest-digital/dmf-app-nmos-crosspoint
-  tag: "4.57"
-  digest: sha256:803eebdd0b66b80b9953d5de7d14aa91f6601764bdbe2fc2f352f9bf4b717f72
+  tag: "4.63"
+  digest: sha256:f476f6ba112a3701c3fcc6e43e0ef19eba8fc176adbe84b45b0deafdab5ad910
 
 # Registry the crosspoint queries through its Query API. The name is used
 # rather than mDNS discovery because mDNS does not reach a pod.
