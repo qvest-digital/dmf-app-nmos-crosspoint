@@ -4,8 +4,8 @@ description: >-
   NMOS controller with a crosspoint view: connects IS-04 senders to receivers
   over IS-05, ST 2110 by SDP and MXL by flow and domain id.
 type: application
-version: 0.1.1
-appVersion: "4.57"
+version: 0.1.2
+appVersion: "4.63"
 kubeVersion: '>=1.28.0-0'
 home: https://github.com/qvest-digital/dmf-app-nmos-crosspoint
 sources:
