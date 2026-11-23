@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nmos-crosspoint
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   annotations:
     reloader.stakater.com/auto: "true"
 spec:
@@ -36,6 +36,8 @@ spec:
               set -eu
               node /seed/merge-settings.js
               cp /users/users.json /config/users.json
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
           volumeMounts:
             - {name: seed, mountPath: /seed}
             - {name: users, mountPath: /users}
@@ -81,7 +83,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: nmos-crosspoint
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 spec:
   selector:
     app: nmos-crosspoint
@@ -92,14 +94,14 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: nmos-crosspoint
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 spec:
   parentRefs:
     - name: {{ .Values.httpRoute.gatewayName }}
       namespace: {{ .Values.httpRoute.gatewayNamespace }}
       sectionName: {{ .Values.httpRoute.sectionName }}
   hostnames:
-    - {{ .Values.keycloak.publicHost }}
+    - {{ required "keycloak.publicHost is required: the host name the crosspoint is reached at" .Values.keycloak.publicHost }}
   rules:
     - backendRefs:
         - name: nmos-crosspoint

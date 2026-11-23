@@ -1,9 +1,8 @@
-# Namespace of the crosspoint and of its login secret.
-namespace: nmos
 # The nmos-crosspoint client is provisioned separately, not by this chart.
 keycloak:
   realm: dmf
-  # Issuer and public host, without the trailing realm path. Per environment.
+  # Issuer and public host, without the trailing realm path. Per environment,
+  # required.
   issuer: ""
   publicHost: ""
 
@@ -12,15 +11,15 @@ image:
   tag: "4.63"
   digest: sha256:f476f6ba112a3701c3fcc6e43e0ef19eba8fc176adbe84b45b0deafdab5ad910
 
-# Registry the crosspoint queries through its Query API. The name is used
-# rather than mDNS discovery because mDNS does not reach a pod.
+# Registry the crosspoint queries through its Query API; ip is required. The
+# name is used rather than mDNS discovery because mDNS does not reach a pod.
 registry:
   ip: ""
   port: 8010
   priority: 10
 
 # Path in the secrets manager of the admin password, which the chart copies
-# into the local admin login.
+# into the local admin login. Required.
 adminPasswordSecretKey: ""
 secretStoreName: aws-secretsmanager
 
@@ -39,3 +38,12 @@ resources:
   limits:
     cpu: "1"
     memory: 1Gi
+
+# The init container only merges settings.json and copies users.json.
+initResources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi

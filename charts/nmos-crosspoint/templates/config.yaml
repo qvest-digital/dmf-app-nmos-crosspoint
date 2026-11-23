@@ -2,7 +2,7 @@ apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: nmos-crosspoint-users
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -19,9 +19,9 @@ spec:
         users.json: |
           {
             "oidc": {
-              "issuer": "{{ .Values.keycloak.issuer }}/realms/{{ .Values.keycloak.realm }}",
+              "issuer": "{{ required "keycloak.issuer is required: the Keycloak URL without the realm path" .Values.keycloak.issuer }}/realms/{{ .Values.keycloak.realm }}",
               "clientId": "nmos-crosspoint",
-              "redirectUri": "https://{{ .Values.keycloak.publicHost }}/auth/oidc/callback",
+              "redirectUri": "https://{{ required "keycloak.publicHost is required: the host name the crosspoint is reached at" .Values.keycloak.publicHost }}/auth/oidc/callback",
               "groupsClaim": "roles",
               "groupMap": {"nmos-crosspoint-admin": ["user", "admin"]},
               "label": "DMF"
@@ -47,18 +47,18 @@ spec:
   data:
     - secretKey: password
       remoteRef:
-        key: {{ .Values.adminPasswordSecretKey | quote }}
+        key: {{ required "adminPasswordSecretKey is required: the secrets manager path of the admin password" .Values.adminPasswordSecretKey | quote }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: nmos-crosspoint
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 data:
   settings.json: |
     {
       "staticNmosRegistries": [
-        {"ip": "{{ .Values.registry.ip }}", "port": {{ .Values.registry.port }}, "priority": {{ .Values.registry.priority }}, "domain": ""}
+        {"ip": "{{ required "registry.ip is required: the address of the NMOS registry" .Values.registry.ip }}", "port": {{ .Values.registry.port }}, "priority": {{ .Values.registry.priority }}, "domain": ""}
       ],
       "logFiles": "./log/",
       "logOutput": true,
@@ -83,7 +83,11 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: nmos-crosspoint-data
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
+  # The saved connections and minted identifiers live here: deleting or
+  # renaming the release must not take them with it.
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   accessModes: [ReadWriteOnce]
   {{- with .Values.storageClassName }}
