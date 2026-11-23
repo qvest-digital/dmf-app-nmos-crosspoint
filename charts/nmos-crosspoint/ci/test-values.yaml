@@ -1,0 +1,7 @@
+# Values CI renders and lints the chart with; every required value is set.
+keycloak:
+  issuer: https://keycloak.example.test
+  publicHost: crosspoint.example.test
+registry:
+  ip: registry.example.test
+adminPasswordSecretKey: test/nmos-crosspoint/admin-password
