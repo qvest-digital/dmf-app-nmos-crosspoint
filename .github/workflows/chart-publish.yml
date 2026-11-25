@@ -1,10 +1,26 @@
 name: chart-publish
 
+# Pushes charts/nmos-crosspoint to oci://ghcr.io/<repository>/charts at the
+# version of its Chart.yaml, whenever a change to the chart reaches master.
+#
+# The run holds no stored credential: GITHUB_TOKEN is issued for this run
+# only, expires with it, and may write the packages of this repository and
+# nothing else. Releasing therefore needs no secret in a public repository.
+#
+# A version that is already in the registry is never pushed again: a tag in
+# GHCR would be overwritten in place, and a cluster pinned to it would run a
+# different chart under the same version. A chart change raises the version
+# in Chart.yaml, which CI checks on the pull request.
+#
+# Actions are pinned to commit SHAs, since a tag can be moved and this job
+# can write packages.
+
 on:
   push:
     branches: [master]
     paths:
       - charts/nmos-crosspoint/**
+      - '!charts/nmos-crosspoint/ci/**'
       - .github/workflows/chart-publish.yml
   workflow_dispatch:
 
@@ -21,15 +37,22 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
-      - run: helm lint charts/nmos-crosspoint
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - run: helm lint charts/nmos-crosspoint -f charts/nmos-crosspoint/ci/test-values.yaml
+
+      - name: Refuse a version that is already published
+        run: sh charts/nmos-crosspoint/ci/unpublished.sh
+
       - name: Log in to GHCR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           printf '%s' "$GH_TOKEN" |
             helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Package and push
         run: |
           set -euo pipefail

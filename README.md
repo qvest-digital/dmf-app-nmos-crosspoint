@@ -45,9 +45,15 @@ Open `http://<host>` in a browser and log in with `admin` / `admin`. Then go to 
 
 ## Helm chart
 
-The publishing workflow pushes `charts/nmos-crosspoint` to
-`oci://ghcr.io/qvest-digital/dmf-app-nmos-crosspoint/charts/nmos-crosspoint`.
-It stores configuration and state on the `nmos-crosspoint-data` PVC.
+A change to `charts/nmos-crosspoint` that reaches `master` is pushed to
+`oci://ghcr.io/qvest-digital/dmf-app-nmos-crosspoint/charts/nmos-crosspoint`
+at the version in its `Chart.yaml`. A version already in the registry is never
+pushed again, so a chart change raises that version; CI checks it on the pull
+request.
+`keycloak.issuer`, `keycloak.publicHost`, `registry.ip` and
+`adminPasswordSecretKey` have no defaults; rendering fails without them.
+It stores configuration and state on the `nmos-crosspoint-data` PVC, which
+deleting or renaming the release leaves in place.
 Registry values and the listener (port 80, address `0.0.0.0`) are applied on each
 pod start; other saved settings are kept.
 The Keycloak client `nmos-crosspoint` is provisioned separately, with redirect

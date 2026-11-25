@@ -26,9 +26,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: helm lint charts/nmos-crosspoint
-      - run: helm template nmos-crosspoint charts/nmos-crosspoint > /dev/null
+      - run: helm lint charts/nmos-crosspoint -f charts/nmos-crosspoint/ci/test-values.yaml
+      - run: sh charts/nmos-crosspoint/ci/test.sh
       - run: node --test server/test/chartSettings.test.js
+      # chart-publish.yml pushes every chart change that reaches master and
+      # refuses a version that is already published, so a pull request that
+      # changes the chart has to raise its version.
+      - name: A chart change raises the chart version
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -eu
+          git fetch --no-tags --depth=1 origin "$BASE"
+          if git diff --quiet "$BASE" HEAD -- charts/nmos-crosspoint ':!charts/nmos-crosspoint/ci'; then
+            echo "the chart is unchanged"
+          else
+            sh charts/nmos-crosspoint/ci/unpublished.sh
+          fi
 
   server:
     runs-on: ubuntu-latest
